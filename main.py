@@ -551,6 +551,21 @@ def setup_routing(hotspot_iface: str):
         run(f"iptables -A FORWARD -i {hotspot_iface} -j ACCEPT")
         run(f"iptables -A FORWARD -o {hotspot_iface} -j ACCEPT")
         
+        # Redirect TCP traffic to redsocks
+        run("iptables -t nat -N REDSOCKS", check=False)
+        run("iptables -t nat -A REDSOCKS -d 0.0.0.0/8 -j RETURN")
+        run("iptables -t nat -A REDSOCKS -d 10.0.0.0/8 -j RETURN")
+        run("iptables -t nat -A REDSOCKS -d 127.0.0.0/8 -j RETURN")
+        run("iptables -t nat -A REDSOCKS -d 169.254.0.0/16 -j RETURN")
+        run("iptables -t nat -A REDSOCKS -d 172.16.0.0/12 -j RETURN")
+        run("iptables -t nat -A REDSOCKS -d 192.168.0.0/16 -j RETURN")
+        run("iptables -t nat -A REDSOCKS -d 224.0.0.0/4 -j RETURN")
+        run("iptables -t nat -A REDSOCKS -d 240.0.0.0/4 -j RETURN")
+        run("iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-ports 12345")
+        
+        # Apply redsocks rules to hotspot traffic
+        run(f"iptables -t nat -A PREROUTING -i {hotspot_iface} -p tcp -j REDSOCKS")
+        
         # Log the rules
         logger.debug("Current iptables rules:")
         run("iptables -L -v -n", check=False)
@@ -600,6 +615,16 @@ base {{
 }}
 
 redsocks {{
+    local_ip = 0.0.0.0;
+    local_port = 12345;
+    ip = {host};
+    port = {port};
+    type = socks5;
+    login = "{username}";
+    password = "{password}";
+}}
+
+redudp {{
     local_ip = 0.0.0.0;
     local_port = 12345;
     ip = {host};
