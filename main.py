@@ -584,6 +584,27 @@ mtu: 1500
 tcp-auto-tuning: true
 loglevel: debug
 log-file: /tmp/tun2socks.log
+log-level: debug
+log-format: text
+log-output: file
+log-rotate: true
+log-rotate-size: 10MB
+log-rotate-keep: 3
+log-rotate-compress: true
+log-rotate-compress-level: 6
+log-rotate-compress-algo: gzip
+log-rotate-compress-suffix: .gz
+log-rotate-compress-format: %Y%m%d%H%M%S
+log-rotate-compress-delay: 1h
+log-rotate-compress-max-age: 24h
+log-rotate-compress-max-size: 100MB
+log-rotate-compress-max-files: 10
+log-rotate-compress-max-total-size: 1GB
+log-rotate-compress-max-total-files: 100
+log-rotate-compress-max-total-age: 168h
+log-rotate-compress-max-total-size: 1GB
+log-rotate-compress-max-total-files: 100
+log-rotate-compress-max-total-age: 168h
 """
         logger.debug(f"Generated tun2socks configuration:\n{config_content}")
         with temp_file(config_content.strip(), "tun2socks.yaml") as config_path:
