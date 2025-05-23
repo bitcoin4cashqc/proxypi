@@ -366,6 +366,7 @@ def cleanup(hotspot_iface: str):
 def setup_hotspot(hotspot_iface: str, ssid: str, password: str):
     """Setup hotspot with proper error handling."""
     logger.info("Setting up hotspot interface and services...")
+    logger.debug(f"Setting up hotspot with interface: {hotspot_iface}, SSID: {ssid}")
 
     try:
         # Check for DNS port conflict
@@ -417,8 +418,11 @@ wpa_passphrase={password}
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 """
+        logger.debug(f"Generated hostapd configuration:\n{hostapd_conf}")
         with temp_file(hostapd_conf.strip(), "hostapd.conf") as hostapd_conf_path:
+            logger.debug(f"Starting hostapd with config file: {hostapd_conf_path}")
             run(f"hostapd {hostapd_conf_path} -B")
+            logger.debug("hostapd started successfully")
 
         dnsmasq_conf = f"""
 interface={hotspot_iface}
@@ -495,6 +499,7 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
             auth, address = rest.split('@', 1)
             username, password = auth.split(':', 1)
             proxy_url = f"socks5://{username}:{password}@{address}"
+            logger.debug(f"Proxy URL with authentication: {proxy_url}")
         
         # Create a temporary config file
         config_content = f"""
@@ -505,7 +510,7 @@ mtu: 1500
 tcp-auto-tuning: true
 loglevel: debug
 """
-        logger.debug(f"Using proxy configuration: {proxy_url}")
+        logger.debug(f"Generated tun2socks configuration:\n{config_content}")
         with temp_file(config_content.strip(), "tun2socks.yaml") as config_path:
             cmd = f"{TUN2SOCKS_PATH} -config {config_path}"
             logger.debug(f"Starting tun2socks with command: {cmd}")
@@ -614,7 +619,6 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, lambda sig, frame: cleanup(hotspot_iface) or sys.exit(0))
 
     try:
-        
         setup_hotspot(hotspot_iface, args.ssid, args.password)
         setup_tun_interface()
         setup_routing(hotspot_iface)
