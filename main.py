@@ -630,11 +630,7 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
         config_content = f"""device: tun://{TUN_INTERFACE}
 interface: {TUN_INTERFACE}
 proxy: {proxy_url_for_config}
-"""
-        if proxy_auth:
-            config_content += f"""proxy-auth: {proxy_auth}
-"""
-        config_content += f"""mtu: 1500
+mtu: 1500
 tcp-auto-tuning: true
 loglevel: debug
 log-file: /tmp/tun2socks.log
@@ -665,7 +661,11 @@ tcp-keepalive-time: 60s
 """
         logger.debug(f"Generated tun2socks configuration:\n{config_content}")
         with temp_file(config_content.strip(), "tun2socks.yaml") as config_path:
+            # Build command with authentication if present
             cmd = f"{TUN2SOCKS_PATH} -config {config_path}"
+            if proxy_auth:
+                cmd += f" --proxy-auth {proxy_auth}"
+            
             logger.debug(f"Starting tun2socks with command: {cmd}")
             
             # Start process with output capture
