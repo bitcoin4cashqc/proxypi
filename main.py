@@ -366,7 +366,7 @@ def validate_proxy_connection(proxy_url: str) -> bool:
     """Validate that the proxy is actually working."""
     try:
         import socket
-        import socks
+        from socks import socksocket, SOCKS5
         
         # Parse proxy URL
         proxy_parts = proxy_url.split('://', 1)
@@ -387,9 +387,9 @@ def validate_proxy_connection(proxy_url: str) -> bool:
             username = password = None
         
         # Create a SOCKS5 socket
-        s = socks.socksocket()
+        s = socksocket()
         s.set_proxy(
-            socks.SOCKS5,
+            SOCKS5,
             host,
             int(port),
             username=username,
