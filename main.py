@@ -39,7 +39,7 @@ DEPENDENCIES = ["hostapd", "dnsmasq", "iptables", "iproute2", "curl", "wireless-
 
 # ========== LOGGING ==========
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG level
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
@@ -47,6 +47,13 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Add file handler for debug logs
+debug_handler = logging.FileHandler('proxypi_debug.log')
+debug_handler.setLevel(logging.DEBUG)
+debug_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s\nFile: %(filename)s\nFunction: %(funcName)s\nLine: %(lineno)d\n')
+debug_handler.setFormatter(debug_formatter)
+logger.addHandler(debug_handler)
 
 tun2socks_process = None
 hostapd_conf_path = ""
@@ -148,14 +155,18 @@ def temp_file(content: str, filename: str):
 
 def run(cmd: str, check: bool = True) -> subprocess.CompletedProcess:
     """Run a command with proper logging and error handling."""
-    logger.info(f"Running: {cmd}")
+    logger.debug(f"Running command: {cmd}")
     try:
         result = subprocess.run(cmd, shell=True, check=check, capture_output=True, text=True)
         if result.stdout:
-            logger.debug(f"Command output: {result.stdout}")
+            logger.debug(f"Command stdout: {result.stdout}")
+        if result.stderr:
+            logger.debug(f"Command stderr: {result.stderr}")
+        logger.debug(f"Command return code: {result.returncode}")
         return result
     except subprocess.CalledProcessError as e:
-        logger.error(f"Command failed: {e.stderr}")
+        logger.error(f"Command failed with return code {e.returncode}")
+        logger.error(f"Command stderr: {e.stderr}")
         raise
 
 def verify_download(file_path: str, expected_hash: Optional[str] = None) -> bool:
@@ -169,7 +180,10 @@ def verify_download(file_path: str, expected_hash: Optional[str] = None) -> bool
 def get_system_architecture() -> str:
     """Get system architecture."""
     try:
+        logger.debug("Detecting system architecture...")
         arch = subprocess.check_output(['uname', '-m']).decode().strip()
+        logger.debug(f"Raw architecture from uname -m: {arch}")
+        
         # Map common architecture names to our supported ones
         arch_map = {
             'aarch64': 'aarch64',
@@ -181,7 +195,9 @@ def get_system_architecture() -> str:
             'i686': 'i686',
             'i386': 'i686'
         }
-        return arch_map.get(arch, arch)
+        mapped_arch = arch_map.get(arch, arch)
+        logger.debug(f"Mapped architecture: {mapped_arch}")
+        return mapped_arch
     except Exception as e:
         logger.error(f"Failed to detect system architecture: {e}")
         raise
@@ -190,48 +206,89 @@ def download_tun2socks():
     """Download and verify tun2socks binary."""
     if os.path.exists(TUN2SOCKS_PATH) and os.access(TUN2SOCKS_PATH, os.X_OK):
         logger.info("tun2socks already installed.")
+        # Check if the binary is executable
+        try:
+            result = run(f"file {TUN2SOCKS_PATH}", check=False)
+            logger.debug(f"Current tun2socks binary info: {result.stdout}")
+        except Exception as e:
+            logger.error(f"Error checking existing tun2socks binary: {e}")
         return
 
     logger.info("Detecting system architecture...")
     arch = get_system_architecture()
     if arch not in TUN2SOCKS_URLS:
+        logger.error(f"Unsupported architecture: {arch}")
+        logger.error(f"Supported architectures: {list(TUN2SOCKS_URLS.keys())}")
         raise RuntimeError(f"Unsupported architecture: {arch}")
 
     logger.info(f"Downloading tun2socks binary for {arch}...")
+    logger.debug(f"Download URL: {TUN2SOCKS_URLS[arch]}")
     temp_path = os.path.join(tempfile.gettempdir(), "tun2socks.zip")
     
     try:
+        # Download the file
+        logger.debug(f"Downloading to temporary path: {temp_path}")
         urllib.request.urlretrieve(TUN2SOCKS_URLS[arch], temp_path)
         
+        # Verify the downloaded file
+        logger.debug(f"Downloaded file size: {os.path.getsize(temp_path)} bytes")
+        
         # Extract the zip file
+        logger.debug("Extracting zip file...")
         with zipfile.ZipFile(temp_path, 'r') as zip_ref:
+            # List contents of zip file
+            logger.debug("Zip file contents:")
+            for file_info in zip_ref.filelist:
+                logger.debug(f"  {file_info.filename} ({file_info.file_size} bytes)")
+            
             # Extract to a temporary directory
             temp_dir = tempfile.mkdtemp()
+            logger.debug(f"Extracting to temporary directory: {temp_dir}")
             zip_ref.extractall(temp_dir)
             
             # Find the tun2socks binary in the extracted files
             tun2socks_binary = None
+            logger.debug("Searching for tun2socks binary...")
             for root, dirs, files in os.walk(temp_dir):
                 for file in files:
                     if file.startswith('tun2socks'):
                         tun2socks_binary = os.path.join(root, file)
+                        logger.debug(f"Found tun2socks binary: {tun2socks_binary}")
                         break
                 if tun2socks_binary:
                     break
             
             if not tun2socks_binary:
+                logger.error("Could not find tun2socks binary in the downloaded package")
                 raise RuntimeError("Could not find tun2socks binary in the downloaded package")
             
+            # Check binary before moving
+            logger.debug("Checking binary before installation...")
+            result = run(f"file {tun2socks_binary}", check=False)
+            logger.debug(f"Binary file info: {result.stdout}")
+            
             # Move the binary to the final location
+            logger.debug(f"Moving binary to {TUN2SOCKS_PATH}")
             shutil.move(tun2socks_binary, TUN2SOCKS_PATH)
+            
+            # Set permissions
+            logger.debug("Setting binary permissions...")
             os.chmod(TUN2SOCKS_PATH, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            
+            # Verify final installation
+            logger.debug("Verifying installation...")
+            result = run(f"file {TUN2SOCKS_PATH}", check=False)
+            logger.debug(f"Installed binary info: {result.stdout}")
+            
             logger.info(f"tun2socks downloaded and installed to {TUN2SOCKS_PATH}")
             
             # Clean up
+            logger.debug("Cleaning up temporary files...")
             shutil.rmtree(temp_dir)
             
     except Exception as e:
         logger.error(f"Failed to download tun2socks: {e}")
+        logger.exception("Detailed error information:")
         if os.path.exists(temp_path):
             os.remove(temp_path)
         raise
@@ -400,6 +457,16 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
     global tun2socks_process
     logger.info("Starting tun2socks...")
     try:
+        # Verify tun2socks binary before starting
+        logger.debug("Verifying tun2socks binary...")
+        result = run(f"file {TUN2SOCKS_PATH}", check=False)
+        logger.debug(f"tun2socks binary info: {result.stdout}")
+        
+        # Check if binary is executable
+        if not os.access(TUN2SOCKS_PATH, os.X_OK):
+            logger.error(f"tun2socks binary is not executable: {TUN2SOCKS_PATH}")
+            raise RuntimeError("tun2socks binary is not executable")
+        
         cmd = (
             f"{TUN2SOCKS_PATH} "
             f"-proxy {proxy_url} "
@@ -409,9 +476,21 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
             f"-tunMask {TUN_MASK} "
             f"-dns {dns}"
         )
-        tun2socks_process = subprocess.Popen(cmd, shell=True)
+        logger.debug(f"Starting tun2socks with command: {cmd}")
+        tun2socks_process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        # Check if process started successfully
+        if tun2socks_process.poll() is not None:
+            stdout, stderr = tun2socks_process.communicate()
+            logger.error(f"tun2socks failed to start. Return code: {tun2socks_process.returncode}")
+            logger.error(f"stdout: {stdout.decode()}")
+            logger.error(f"stderr: {stderr.decode()}")
+            raise RuntimeError("tun2socks failed to start")
+            
+        logger.debug("tun2socks process started successfully")
     except Exception as e:
         logger.error(f"Failed to start tun2socks: {e}")
+        logger.exception("Detailed error information:")
         raise
 
 # ========== MAIN ==========
