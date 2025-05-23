@@ -317,6 +317,13 @@ def cleanup(hotspot_iface: str):
     if tun2socks_process and tun2socks_process.poll() is None:
         logger.info("Stopping tun2socks...")
         try:
+            # Get any remaining output
+            stdout, stderr = tun2socks_process.communicate(timeout=1)
+            if stdout:
+                logger.debug(f"Final tun2socks stdout: {stdout}")
+            if stderr:
+                logger.debug(f"Final tun2socks stderr: {stderr}")
+            
             tun2socks_process.terminate()
             tun2socks_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -463,9 +470,16 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
         logger.debug(f"tun2socks binary info: {result.stdout}")
         
         # Check if binary is executable
-        if not os.access(TUN2SOCKS_PATH, os.X_OK):
+        if not os.access(TUN2SOCKS_PATH, check=False):
             logger.error(f"tun2socks binary is not executable: {TUN2SOCKS_PATH}")
             raise RuntimeError("tun2socks binary is not executable")
+        
+        # Test binary execution
+        logger.debug("Testing binary execution...")
+        test_result = run(f"{TUN2SOCKS_PATH} -version", check=False)
+        logger.debug(f"Version test output: {test_result.stdout}")
+        if test_result.stderr:
+            logger.debug(f"Version test error: {test_result.stderr}")
         
         cmd = (
             f"{TUN2SOCKS_PATH} "
@@ -477,17 +491,60 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
             f"-dns {dns}"
         )
         logger.debug(f"Starting tun2socks with command: {cmd}")
-        tun2socks_process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        # Start process with output capture
+        tun2socks_process = subprocess.Popen(
+            cmd,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
         
         # Check if process started successfully
         if tun2socks_process.poll() is not None:
             stdout, stderr = tun2socks_process.communicate()
             logger.error(f"tun2socks failed to start. Return code: {tun2socks_process.returncode}")
-            logger.error(f"stdout: {stdout.decode()}")
-            logger.error(f"stderr: {stderr.decode()}")
+            if stdout:
+                logger.error(f"stdout: {stdout}")
+            if stderr:
+                logger.error(f"stderr: {stderr}")
             raise RuntimeError("tun2socks failed to start")
-            
+        
+        # Start output monitoring thread
+        def monitor_output(process, pipe, log_func):
+            for line in pipe:
+                log_func(line.strip())
+        
+        import threading
+        stdout_thread = threading.Thread(
+            target=monitor_output,
+            args=(tun2socks_process, tun2socks_process.stdout, logger.info),
+            daemon=True
+        )
+        stderr_thread = threading.Thread(
+            target=monitor_output,
+            args=(tun2socks_process, tun2socks_process.stderr, logger.error),
+            daemon=True
+        )
+        stdout_thread.start()
+        stderr_thread.start()
+        
         logger.debug("tun2socks process started successfully")
+        
+        # Wait a moment to check if process is still running
+        time.sleep(2)
+        if tun2socks_process.poll() is not None:
+            stdout, stderr = tun2socks_process.communicate()
+            logger.error("tun2socks process terminated unexpectedly")
+            if stdout:
+                logger.error(f"stdout: {stdout}")
+            if stderr:
+                logger.error(f"stderr: {stderr}")
+            raise RuntimeError("tun2socks process terminated unexpectedly")
+            
     except Exception as e:
         logger.error(f"Failed to start tun2socks: {e}")
         logger.exception("Detailed error information:")
