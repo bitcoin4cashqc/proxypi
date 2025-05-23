@@ -605,26 +605,30 @@ def start_proxy(proxy_url: str, dns: str = DEFAULT_DNS):
         logger.debug(f"Using proxy URL: {proxy_url_for_config}")
         
         # Start redsocks for TCP forwarding
-        redsocks_conf = f"""
-base {{
+        redsocks_conf = """
+base {
     log_debug = on;
     log_info = on;
     log = "file:/tmp/redsocks.log";
     daemon = off;
     redirector = iptables;
-}}
+}
 
-redsocks {{
+redsocks {
     local_ip = 0.0.0.0;
     local_port = 12345;
-    ip = {host};
-    port = {port};
+    ip = """ + host + """;
+    port = """ + port + """;
     type = socks5;
-    login = "{username}";
-    password = "{password}";
-}}
+    login = \"""" + username + """\";
+    password = \"""" + password + """\";
+}
 """
+        # Write the configuration to a temporary file
         with temp_file(redsocks_conf.strip(), "redsocks.conf") as redsocks_conf_path:
+            # Log the configuration for debugging
+            logger.debug(f"Generated redsocks configuration:\n{redsocks_conf}")
+            
             # Start redsocks
             cmd = f"redsocks -c {redsocks_conf_path}"
             logger.debug(f"Starting redsocks with command: {cmd}")
