@@ -605,6 +605,7 @@ def start_proxy(proxy_url: str, dns: str = DEFAULT_DNS):
         logger.debug(f"Using proxy URL: {proxy_url_for_config}")
         
         # Start redsocks for TCP forwarding
+        redsocks_conf_path = "/etc/redsocks.conf"
         redsocks_conf = """
 base {
     log_debug = on;
@@ -624,13 +625,14 @@ redsocks {
     password = \"""" + password + """\";
 }
 """
-        # Write the configuration to a temporary file
-        with temp_file(redsocks_conf.strip(), "redsocks.conf") as redsocks_conf_path:
-            # Log the configuration for debugging
+        # Write the configuration file
+        try:
+            with open(redsocks_conf_path, "w") as f:
+                f.write(redsocks_conf.strip())
             logger.debug(f"Generated redsocks configuration:\n{redsocks_conf}")
             
-            # Start redsocks
-            cmd = f"redsocks -c {redsocks_conf_path}"
+            # Start redsocks with debug output
+            cmd = "redsocks -d"
             logger.debug(f"Starting redsocks with command: {cmd}")
             
             # Start process with output capture
@@ -686,6 +688,10 @@ redsocks {
                     logger.error(f"stderr: {stderr}")
                 raise RuntimeError("redsocks process terminated unexpectedly")
                 
+        except Exception as e:
+            logger.error(f"Failed to write redsocks configuration: {e}")
+            raise
+
     except Exception as e:
         logger.error(f"Failed to start proxy: {e}")
         logger.exception("Detailed error information:")
