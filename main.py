@@ -470,7 +470,7 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
         logger.debug(f"tun2socks binary info: {result.stdout}")
         
         # Check if binary is executable
-        if not os.access(TUN2SOCKS_PATH, check=False):
+        if not os.access(TUN2SOCKS_PATH, os.X_OK):
             logger.error(f"tun2socks binary is not executable: {TUN2SOCKS_PATH}")
             raise RuntimeError("tun2socks binary is not executable")
         
