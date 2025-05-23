@@ -362,6 +362,49 @@ def cleanup(hotspot_iface: str):
 
     logger.info("Cleanup complete.")
 
+def validate_proxy_connection(proxy_url: str) -> bool:
+    """Validate that the proxy is actually working."""
+    try:
+        import socket
+        import socks
+        
+        # Parse proxy URL
+        proxy_parts = proxy_url.split('://', 1)
+        if len(proxy_parts) != 2:
+            return False
+        
+        protocol, rest = proxy_parts
+        if protocol != 'socks5':
+            return False
+        
+        # Handle authentication if present
+        if '@' in rest:
+            auth, address = rest.split('@', 1)
+            username, password = auth.split(':', 1)
+            host, port = address.split(':', 1)
+        else:
+            host, port = rest.split(':', 1)
+            username = password = None
+        
+        # Create a SOCKS5 socket
+        s = socks.socksocket()
+        s.set_proxy(
+            socks.SOCKS5,
+            host,
+            int(port),
+            username=username,
+            password=password
+        )
+        s.settimeout(10)
+        
+        # Try to connect to a known host
+        s.connect(('8.8.8.8', 53))
+        s.close()
+        return True
+    except Exception as e:
+        logger.error(f"Proxy validation failed: {e}")
+        return False
+
 # ========== SETUP FUNCTIONS ==========
 def setup_hotspot(hotspot_iface: str, ssid: str, password: str):
     """Setup hotspot with proper error handling."""
@@ -431,6 +474,8 @@ no-resolv
 no-poll
 server=8.8.8.8
 server=8.8.4.4
+bind-interfaces
+listen-address={HOTSPOT_IP}
 """
         with temp_file(dnsmasq_conf.strip(), "dnsmasq.conf") as dnsmasq_conf_path:
             run(f"dnsmasq -C {dnsmasq_conf_path}")
@@ -594,6 +639,13 @@ if __name__ == "__main__":
     # Validate proxy URL
     if not validate_proxy_url(args.proxy):
         sys.exit(1)
+
+    # Validate proxy connection
+    logger.info("Validating proxy connection...")
+    if not validate_proxy_connection(args.proxy):
+        logger.error("Failed to connect to proxy. Please check if the proxy is working.")
+        sys.exit(1)
+    logger.info("Proxy connection validated successfully.")
 
     # Detect wireless interface
     wireless_interfaces = get_wireless_interfaces()
