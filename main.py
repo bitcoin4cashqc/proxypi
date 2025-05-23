@@ -55,7 +55,9 @@ debug_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s\n
 debug_handler.setFormatter(debug_formatter)
 logger.addHandler(debug_handler)
 
+# Global process variables
 tun2socks_process = None
+redsocks_process = None
 hostapd_conf_path = ""
 dnsmasq_conf_path = ""
 
@@ -311,32 +313,27 @@ def check_and_install_dependencies():
 
 def cleanup(hotspot_iface: str):
     """Cleanup function with proper error handling and logging."""
+    global redsocks_process
     logger.info("Cleaning up...")
     
-    # Stop tun2socks if running
-    if tun2socks_process and tun2socks_process.poll() is None:
-        logger.info("Stopping tun2socks...")
+    # Stop redsocks if running
+    if redsocks_process and redsocks_process.poll() is None:
+        logger.info("Stopping redsocks...")
         try:
             # Get any remaining output
-            stdout, stderr = tun2socks_process.communicate(timeout=1)
+            stdout, stderr = redsocks_process.communicate(timeout=1)
             if stdout:
-                logger.debug(f"Final tun2socks stdout: {stdout}")
+                logger.debug(f"Final redsocks stdout: {stdout}")
             if stderr:
-                logger.debug(f"Final tun2socks stderr: {stderr}")
+                logger.debug(f"Final redsocks stderr: {stderr}")
             
-            tun2socks_process.terminate()
-            tun2socks_process.wait(timeout=5)
+            redsocks_process.terminate()
+            redsocks_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            logger.warning("tun2socks did not terminate gracefully, forcing...")
-            tun2socks_process.kill()
+            logger.warning("redsocks did not terminate gracefully, forcing...")
+            redsocks_process.kill()
         except Exception as e:
-            logger.error(f"Error stopping tun2socks: {e}")
-
-    # Remove default route through TUN
-    try:
-        run(f"ip route del default via {TUN_GATEWAY} dev {TUN_INTERFACE}", check=False)
-    except Exception as e:
-        logger.error(f"Error removing default route: {e}")
+            logger.error(f"Error stopping redsocks: {e}")
 
     # Flush iptables rules
     try:
@@ -344,13 +341,6 @@ def cleanup(hotspot_iface: str):
         run("iptables -t nat -F", check=False)
     except Exception as e:
         logger.error(f"Error flushing iptables: {e}")
-
-    # Remove TUN interface
-    try:
-        run(f"ip link set {TUN_INTERFACE} down", check=False)
-        run(f"ip tuntap del dev {TUN_INTERFACE} mode tun", check=False)
-    except Exception as e:
-        logger.error(f"Error removing TUN interface: {e}")
 
     # Stop services
     try:
@@ -554,18 +544,12 @@ def setup_routing(hotspot_iface: str):
         # Enable IP forwarding
         run("sysctl -w net.ipv4.ip_forward=1")
         
-        # Set up NAT
-        run(f"iptables -t nat -A POSTROUTING -o {TUN_INTERFACE} -j MASQUERADE")
+        # Set up NAT for the proxy
+        run(f"iptables -t nat -A POSTROUTING -o {hotspot_iface} -j MASQUERADE")
         
         # Allow forwarding between interfaces
-        run(f"iptables -A FORWARD -i {hotspot_iface} -o {TUN_INTERFACE} -j ACCEPT")
-        run(f"iptables -A FORWARD -i {TUN_INTERFACE} -o {hotspot_iface} -j ACCEPT")
-        
-        # Drop traffic that doesn't go through TUN
-        run(f"iptables -A FORWARD -i {hotspot_iface} ! -o {TUN_INTERFACE} -j DROP")
-        
-        # Add default route through TUN interface
-        run(f"ip route add default via {TUN_GATEWAY} dev {TUN_INTERFACE} metric 100", check=False)
+        run(f"iptables -A FORWARD -i {hotspot_iface} -j ACCEPT")
+        run(f"iptables -A FORWARD -o {hotspot_iface} -j ACCEPT")
         
         # Log the rules
         logger.debug("Current iptables rules:")
@@ -579,28 +563,11 @@ def setup_routing(hotspot_iface: str):
         logger.error(f"Failed to setup routing: {e}")
         raise
 
-def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
-    """Start tun2socks with proper error handling."""
-    global tun2socks_process
-    logger.info("Starting tun2socks...")
+def start_proxy(proxy_url: str, dns: str = DEFAULT_DNS):
+    """Start proxy forwarding with proper error handling."""
+    global redsocks_process
+    logger.info("Starting proxy forwarding...")
     try:
-        # Verify tun2socks binary before starting
-        logger.debug("Verifying tun2socks binary...")
-        result = run(f"file {TUN2SOCKS_PATH}", check=False)
-        logger.debug(f"tun2socks binary info: {result.stdout}")
-        
-        # Check if binary is executable
-        if not os.access(TUN2SOCKS_PATH, os.X_OK):
-            logger.error(f"tun2socks binary is not executable: {TUN2SOCKS_PATH}")
-            raise RuntimeError("tun2socks binary is not executable")
-        
-        # Test binary execution
-        logger.debug("Testing binary execution...")
-        test_result = run(f"{TUN2SOCKS_PATH} -version", check=False)
-        logger.debug(f"Version test output: {test_result.stdout}")
-        if test_result.stderr:
-            logger.debug(f"Version test error: {test_result.stderr}")
-        
         # Parse proxy URL to ensure proper formatting
         proxy_parts = proxy_url.split('://', 1)
         if len(proxy_parts) != 2:
@@ -615,54 +582,40 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
             auth, address = rest.split('@', 1)
             username, password = auth.split(':', 1)
             host, port = address.split(':', 1)
-            # Use the original proxy URL that includes authentication
             proxy_url_for_config = proxy_url
         else:
             host, port = rest.split(':', 1)
             proxy_url_for_config = f"socks5://{host}:{port}"
         
-        logger.debug(f"Using proxy URL for config: {proxy_url_for_config}")
+        logger.debug(f"Using proxy URL: {proxy_url_for_config}")
         
-        # Create a temporary config file with proper YAML format
-        config_content = f"""device: tun://{TUN_INTERFACE}
-interface: {TUN_INTERFACE}
-proxy: {proxy_url_for_config}
-mtu: 1500
-tcp-auto-tuning: true
-loglevel: debug
-log-file: /tmp/tun2socks.log
-log-level: debug
-log-format: text
-log-output: file
-log-rotate: true
-log-rotate-size: 10MB
-log-rotate-keep: 3
-log-rotate-compress: true
-log-rotate-compress-level: 6
-log-rotate-compress-algo: gzip
-log-rotate-compress-suffix: .gz
-log-rotate-compress-format: "%Y%m%d%H%M%S"
-log-rotate-compress-delay: 1h
-log-rotate-compress-max-age: 24h
-log-rotate-compress-max-size: 100MB
-log-rotate-compress-max-files: 10
-log-rotate-compress-max-total-size: 1GB
-log-rotate-compress-max-total-files: 100
-log-rotate-compress-max-total-age: 168h
-tcp-timeout: 300s
-udp-timeout: 60s
-tcp-keepalive: 30s
-tcp-keepalive-probes: 3
-tcp-keepalive-interval: 10s
-tcp-keepalive-time: 60s
+        # Start redsocks for TCP forwarding
+        redsocks_conf = f"""
+base {{
+    log_debug = on;
+    log_info = on;
+    log = "file:/tmp/redsocks.log";
+    daemon = off;
+    redirector = iptables;
+}}
+
+redsocks {{
+    local_ip = 0.0.0.0;
+    local_port = 12345;
+    ip = {host};
+    port = {port};
+    type = socks5;
+    login = "{username}";
+    password = "{password}";
+}}
 """
-        logger.debug(f"Generated tun2socks configuration:\n{config_content}")
-        with temp_file(config_content.strip(), "tun2socks.yaml") as config_path:
-            cmd = f"{TUN2SOCKS_PATH} -config {config_path}"
-            logger.debug(f"Starting tun2socks with command: {cmd}")
+        with temp_file(redsocks_conf.strip(), "redsocks.conf") as redsocks_conf_path:
+            # Start redsocks
+            cmd = f"redsocks -c {redsocks_conf_path}"
+            logger.debug(f"Starting redsocks with command: {cmd}")
             
             # Start process with output capture
-            tun2socks_process = subprocess.Popen(
+            redsocks_process = subprocess.Popen(
                 cmd,
                 shell=True,
                 stdout=subprocess.PIPE,
@@ -673,14 +626,14 @@ tcp-keepalive-time: 60s
             )
             
             # Check if process started successfully
-            if tun2socks_process.poll() is not None:
-                stdout, stderr = tun2socks_process.communicate()
-                logger.error(f"tun2socks failed to start. Return code: {tun2socks_process.returncode}")
+            if redsocks_process.poll() is not None:
+                stdout, stderr = redsocks_process.communicate()
+                logger.error(f"redsocks failed to start. Return code: {redsocks_process.returncode}")
                 if stdout:
                     logger.error(f"stdout: {stdout}")
                 if stderr:
                     logger.error(f"stderr: {stderr}")
-                raise RuntimeError("tun2socks failed to start")
+                raise RuntimeError("redsocks failed to start")
             
             # Start output monitoring thread
             def monitor_output(process, pipe, log_func):
@@ -690,32 +643,32 @@ tcp-keepalive-time: 60s
             import threading
             stdout_thread = threading.Thread(
                 target=monitor_output,
-                args=(tun2socks_process, tun2socks_process.stdout, logger.info),
+                args=(redsocks_process, redsocks_process.stdout, logger.info),
                 daemon=True
             )
             stderr_thread = threading.Thread(
                 target=monitor_output,
-                args=(tun2socks_process, tun2socks_process.stderr, logger.error),
+                args=(redsocks_process, redsocks_process.stderr, logger.error),
                 daemon=True
             )
             stdout_thread.start()
             stderr_thread.start()
             
-            logger.debug("tun2socks process started successfully")
+            logger.debug("redsocks process started successfully")
             
             # Wait a moment to check if process is still running
             time.sleep(2)
-            if tun2socks_process.poll() is not None:
-                stdout, stderr = tun2socks_process.communicate()
-                logger.error("tun2socks process terminated unexpectedly")
+            if redsocks_process.poll() is not None:
+                stdout, stderr = redsocks_process.communicate()
+                logger.error("redsocks process terminated unexpectedly")
                 if stdout:
                     logger.error(f"stdout: {stdout}")
                 if stderr:
                     logger.error(f"stderr: {stderr}")
-                raise RuntimeError("tun2socks process terminated unexpectedly")
+                raise RuntimeError("redsocks process terminated unexpectedly")
                 
     except Exception as e:
-        logger.error(f"Failed to start tun2socks: {e}")
+        logger.error(f"Failed to start proxy: {e}")
         logger.exception("Detailed error information:")
         raise
 
@@ -726,7 +679,8 @@ if __name__ == "__main__":
         sys.exit(1)
     
     check_and_install_dependencies()
-    download_tun2socks()
+    # Remove tun2socks download since we're not using it
+    # download_tun2socks()
 
     parser = argparse.ArgumentParser(description="Raspberry Pi Wi-Fi Hotspot SOCKS5 Proxy Forwarder")
     parser.add_argument("--proxy", required=True, 
@@ -773,16 +727,16 @@ if __name__ == "__main__":
 
     try:
         setup_hotspot(hotspot_iface, args.ssid, args.password)
-        setup_tun_interface()
         setup_routing(hotspot_iface)
-        start_tun2socks(args.proxy, args.dns)
+        start_proxy(args.proxy, args.dns)
 
         logger.info("Hotspot with proxy forwarding running.")
         logger.info(f"Connect your devices to Wi-Fi SSID: {args.ssid}")
         logger.info(f"Traffic will be routed via SOCKS5 proxy: {args.proxy}")
         logger.info("Press Ctrl+C to stop and cleanup.")
 
-        tun2socks_process.wait()
+        # Wait for the proxy process
+        redsocks_process.wait()
 
     except Exception as e:
         logger.error(f"An error occurred: {e}")
