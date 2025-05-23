@@ -551,8 +551,13 @@ def setup_routing(hotspot_iface: str):
         run(f"iptables -A FORWARD -i {hotspot_iface} -j ACCEPT")
         run(f"iptables -A FORWARD -o {hotspot_iface} -j ACCEPT")
         
-        # Redirect TCP traffic to redsocks
-        run("iptables -t nat -N REDSOCKS", check=False)
+        # Create REDSOCKS chain if it doesn't exist
+        run("iptables -t nat -N REDSOCKS 2>/dev/null", check=False)
+        
+        # Clear existing REDSOCKS chain
+        run("iptables -t nat -F REDSOCKS", check=False)
+        
+        # Add rules to REDSOCKS chain
         run("iptables -t nat -A REDSOCKS -d 0.0.0.0/8 -j RETURN")
         run("iptables -t nat -A REDSOCKS -d 10.0.0.0/8 -j RETURN")
         run("iptables -t nat -A REDSOCKS -d 127.0.0.0/8 -j RETURN")
@@ -561,10 +566,15 @@ def setup_routing(hotspot_iface: str):
         run("iptables -t nat -A REDSOCKS -d 192.168.0.0/16 -j RETURN")
         run("iptables -t nat -A REDSOCKS -d 224.0.0.0/4 -j RETURN")
         run("iptables -t nat -A REDSOCKS -d 240.0.0.0/4 -j RETURN")
+        
+        # Redirect all TCP traffic to redsocks
         run("iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-ports 12345")
         
         # Apply redsocks rules to hotspot traffic
         run(f"iptables -t nat -A PREROUTING -i {hotspot_iface} -p tcp -j REDSOCKS")
+        
+        # Also apply to localhost traffic
+        run("iptables -t nat -A PREROUTING -i lo -p tcp -j REDSOCKS")
         
         # Log the rules
         logger.debug("Current iptables rules:")
@@ -574,6 +584,10 @@ def setup_routing(hotspot_iface: str):
         # Log routing table
         logger.debug("Current routing table:")
         run("ip route show", check=False)
+        
+        # Verify redsocks is listening
+        run("netstat -tulpn | grep redsocks", check=False)
+        
     except Exception as e:
         logger.error(f"Failed to setup routing: {e}")
         raise
