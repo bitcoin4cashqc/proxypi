@@ -365,9 +365,6 @@ def cleanup(hotspot_iface: str):
 def validate_proxy_connection(proxy_url: str) -> bool:
     """Validate that the proxy is actually working."""
     try:
-        import socket
-        from socks import socksocket, SOCKS5
-        
         # Parse proxy URL
         proxy_parts = proxy_url.split('://', 1)
         if len(proxy_parts) != 2:
@@ -382,25 +379,23 @@ def validate_proxy_connection(proxy_url: str) -> bool:
             auth, address = rest.split('@', 1)
             username, password = auth.split(':', 1)
             host, port = address.split(':', 1)
+            proxy_arg = f"--proxy socks5://{username}:{password}@{host}:{port}"
         else:
             host, port = rest.split(':', 1)
-            username = password = None
-        
-        # Create a SOCKS5 socket
-        s = socksocket()
-        s.set_proxy(
-            SOCKS5,
-            host,
-            int(port),
-            username=username,
-            password=password
-        )
-        s.settimeout(10)
+            proxy_arg = f"--proxy socks5://{host}:{port}"
         
         # Try to connect to a known host
-        s.connect(('8.8.8.8', 53))
-        s.close()
-        return True
+        cmd = f"curl -s --connect-timeout 10 {proxy_arg} https://www.google.com"
+        logger.debug(f"Testing proxy with command: {cmd}")
+        result = run(cmd, check=False)
+        
+        if result.returncode == 0:
+            logger.info("Proxy connection test successful")
+            return True
+        else:
+            logger.error(f"Proxy connection test failed: {result.stderr}")
+            return False
+            
     except Exception as e:
         logger.error(f"Proxy validation failed: {e}")
         return False
