@@ -475,6 +475,7 @@ cache-size=1000
 dns-forward-max=500
 log-queries
 log-dhcp
+log-facility=/tmp/dnsmasq.log
 """
         with temp_file(dnsmasq_conf.strip(), "dnsmasq.conf") as dnsmasq_conf_path:
             run(f"dnsmasq -C {dnsmasq_conf_path}")
@@ -499,10 +500,31 @@ def setup_routing(hotspot_iface: str):
     """Setup routing rules with proper error handling."""
     logger.info("Setting up iptables rules...")
     try:
+        # Flush existing rules
+        run("iptables -F", check=False)
+        run("iptables -t nat -F", check=False)
+        
+        # Enable IP forwarding
+        run("sysctl -w net.ipv4.ip_forward=1")
+        
+        # Set up NAT
         run(f"iptables -t nat -A POSTROUTING -o {TUN_INTERFACE} -j MASQUERADE")
+        
+        # Allow forwarding between interfaces
         run(f"iptables -A FORWARD -i {hotspot_iface} -o {TUN_INTERFACE} -j ACCEPT")
         run(f"iptables -A FORWARD -i {TUN_INTERFACE} -o {hotspot_iface} -j ACCEPT")
+        
+        # Drop traffic that doesn't go through TUN
         run(f"iptables -A FORWARD -i {hotspot_iface} ! -o {TUN_INTERFACE} -j DROP")
+        
+        # Log the rules
+        logger.debug("Current iptables rules:")
+        run("iptables -L -v -n", check=False)
+        run("iptables -t nat -L -v -n", check=False)
+        
+        # Log routing table
+        logger.debug("Current routing table:")
+        run("ip route show", check=False)
     except Exception as e:
         logger.error(f"Failed to setup routing: {e}")
         raise
