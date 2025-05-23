@@ -481,6 +481,21 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
         if test_result.stderr:
             logger.debug(f"Version test error: {test_result.stderr}")
         
+        # Parse proxy URL to ensure proper formatting
+        proxy_parts = proxy_url.split('://', 1)
+        if len(proxy_parts) != 2:
+            raise ValueError("Invalid proxy URL format")
+        
+        protocol, rest = proxy_parts
+        if protocol != 'socks5':
+            raise ValueError("Only SOCKS5 protocol is supported")
+        
+        # Handle authentication if present
+        if '@' in rest:
+            auth, address = rest.split('@', 1)
+            username, password = auth.split(':', 1)
+            proxy_url = f"socks5://{username}:{password}@{address}"
+        
         # Create a temporary config file
         config_content = f"""
 device: tun://{TUN_INTERFACE}
@@ -490,6 +505,7 @@ mtu: 1500
 tcp-auto-tuning: true
 loglevel: debug
 """
+        logger.debug(f"Using proxy configuration: {proxy_url}")
         with temp_file(config_content.strip(), "tun2socks.yaml") as config_path:
             cmd = f"{TUN2SOCKS_PATH} -config {config_path}"
             logger.debug(f"Starting tun2socks with command: {cmd}")
