@@ -332,6 +332,12 @@ def cleanup(hotspot_iface: str):
         except Exception as e:
             logger.error(f"Error stopping tun2socks: {e}")
 
+    # Remove default route through TUN
+    try:
+        run(f"ip route del default via {TUN_GATEWAY} dev {TUN_INTERFACE}", check=False)
+    except Exception as e:
+        logger.error(f"Error removing default route: {e}")
+
     # Flush iptables rules
     try:
         run("iptables -F", check=False)
@@ -516,6 +522,9 @@ def setup_routing(hotspot_iface: str):
         
         # Drop traffic that doesn't go through TUN
         run(f"iptables -A FORWARD -i {hotspot_iface} ! -o {TUN_INTERFACE} -j DROP")
+        
+        # Add default route through TUN interface
+        run(f"ip route add default via {TUN_GATEWAY} dev {TUN_INTERFACE} metric 100", check=False)
         
         # Log the rules
         logger.debug("Current iptables rules:")
