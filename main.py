@@ -429,6 +429,32 @@ def validate_proxy_connection(proxy_url: str) -> bool:
         return False
 
 # ========== SETUP FUNCTIONS ==========
+def setup_tun_interface():
+    """Setup TUN interface with proper error handling."""
+    logger.info("Creating TUN interface...")
+    try:
+        # Remove existing TUN interface if it exists
+        run(f"ip tuntap del dev {TUN_INTERFACE} mode tun", check=False)
+        time.sleep(1)  # Wait for interface to be removed
+        
+        # Create new TUN interface
+        run(f"ip tuntap add dev {TUN_INTERFACE} mode tun user root")
+        time.sleep(1)  # Wait for interface to be created
+        
+        # Configure TUN interface
+        run(f"ip addr add {TUN_ADDR}/{TUN_MASK} dev {TUN_INTERFACE}")
+        run(f"ip link set {TUN_INTERFACE} up")
+        
+        # Verify interface was created
+        result = run(f"ip link show {TUN_INTERFACE}", check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to create TUN interface: {result.stderr}")
+            
+        logger.info(f"TUN interface {TUN_INTERFACE} created successfully")
+    except Exception as e:
+        logger.error(f"Failed to setup TUN interface: {e}")
+        raise
+
 def setup_hotspot(hotspot_iface: str, ssid: str, password: str):
     """Setup hotspot with proper error handling."""
     logger.info("Setting up hotspot interface and services...")
@@ -490,6 +516,10 @@ rsn_pairwise=CCMP
             run(f"hostapd {hostapd_conf_path} -B")
             logger.debug("hostapd started successfully")
 
+        # Create log directory with proper permissions
+        run("mkdir -p /var/log/dnsmasq", check=False)
+        run("chmod 755 /var/log/dnsmasq", check=False)
+        
         dnsmasq_conf = f"""
 interface={hotspot_iface}
 dhcp-range={DNS_RANGE}
@@ -503,7 +533,7 @@ cache-size=1000
 dns-forward-max=500
 log-queries
 log-dhcp
-log-facility=/tmp/dnsmasq.log
+log-facility=/var/log/dnsmasq/dnsmasq.log
 """
         with temp_file(dnsmasq_conf.strip(), "dnsmasq.conf") as dnsmasq_conf_path:
             run(f"dnsmasq -C {dnsmasq_conf_path}")
@@ -511,17 +541,6 @@ log-facility=/tmp/dnsmasq.log
         run("sysctl -w net.ipv4.ip_forward=1")
     except Exception as e:
         logger.error(f"Failed to setup hotspot: {e}")
-        raise
-
-def setup_tun_interface():
-    """Setup TUN interface with proper error handling."""
-    logger.info("Creating TUN interface...")
-    try:
-        run(f"ip tuntap add dev {TUN_INTERFACE} mode tun")
-        run(f"ip addr add {TUN_ADDR}/{TUN_MASK} dev {TUN_INTERFACE}")
-        run(f"ip link set {TUN_INTERFACE} up")
-    except Exception as e:
-        logger.error(f"Failed to setup TUN interface: {e}")
         raise
 
 def setup_routing(hotspot_iface: str):
