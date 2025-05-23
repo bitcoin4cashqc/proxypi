@@ -28,6 +28,36 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Check for DNS port conflict
+print_yellow "Checking for DNS port conflicts..."
+if lsof -i :53 >/dev/null 2>&1; then
+    print_yellow "Port 53 is in use. Attempting to resolve..."
+    
+    # Try to stop systemd-resolved if it's running
+    if systemctl is-active --quiet systemd-resolved; then
+        print_yellow "Stopping systemd-resolved..."
+        systemctl stop systemd-resolved
+        systemctl disable systemd-resolved
+    fi
+    
+    # Try to stop any other dnsmasq instances
+    if pgrep dnsmasq >/dev/null; then
+        print_yellow "Stopping existing dnsmasq instances..."
+        systemctl stop dnsmasq
+        pkill dnsmasq
+    fi
+    
+    # Wait a moment for ports to be released
+    sleep 2
+    
+    # Check if port is still in use
+    if lsof -i :53 >/dev/null 2>&1; then
+        print_red "Port 53 is still in use. Please manually stop the service using port 53 and try again."
+        print_yellow "You can check what's using port 53 with: sudo lsof -i :53"
+        exit 1
+    fi
+fi
+
 # Check if running on Raspberry Pi
 if ! grep -q "Raspberry Pi" /proc/device-tree/model 2>/dev/null; then
     print_yellow "Warning: This script is designed for Raspberry Pi OS"

@@ -12,6 +12,8 @@ import hashlib
 import shutil
 from contextlib import contextmanager
 from typing import Optional, List
+import time
+import zipfile
 
 # ========== CONFIG ==========
 TUN_INTERFACE = "tun0"
@@ -21,8 +23,15 @@ TUN_MASK = "255.255.255.0"
 DEFAULT_HOTSPOT_IFACE = "wlan0"  # Will be overridden by detected interface
 HOTSPOT_IP = "192.168.45.1"
 DNS_RANGE = "192.168.45.10,192.168.45.100,12h"
-TUN2SOCKS_URL_LINUX_ARM = "https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-linux-arm64.zip"
-#TUN2SOCKS_URL_LINUX_ARM = "https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-linux-amd64.zip"
+
+# Tun2socks URLs for different architectures
+TUN2SOCKS_URLS = {
+    'aarch64': "https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-linux-arm64.zip",
+    'armv7l': "https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-linux-arm.zip",
+    'x86_64': "https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-linux-amd64.zip",
+    'i686': "https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-linux-386.zip"
+}
+
 TUN2SOCKS_PATH = "/usr/local/bin/tun2socks"
 DEFAULT_DNS = "8.8.8.8"
 
@@ -157,29 +166,78 @@ def verify_download(file_path: str, expected_hash: Optional[str] = None) -> bool
         file_hash = hashlib.sha256(f.read()).hexdigest()
     return file_hash == expected_hash
 
+def get_system_architecture() -> str:
+    """Get system architecture."""
+    try:
+        arch = subprocess.check_output(['uname', '-m']).decode().strip()
+        # Map common architecture names to our supported ones
+        arch_map = {
+            'aarch64': 'aarch64',
+            'arm64': 'aarch64',
+            'armv7l': 'armv7l',
+            'armv6l': 'armv7l',  # Use armv7l binary for armv6l
+            'x86_64': 'x86_64',
+            'amd64': 'x86_64',
+            'i686': 'i686',
+            'i386': 'i686'
+        }
+        return arch_map.get(arch, arch)
+    except Exception as e:
+        logger.error(f"Failed to detect system architecture: {e}")
+        raise
+
 def download_tun2socks():
     """Download and verify tun2socks binary."""
     if os.path.exists(TUN2SOCKS_PATH) and os.access(TUN2SOCKS_PATH, os.X_OK):
         logger.info("tun2socks already installed.")
         return
 
-    logger.info("Downloading tun2socks binary...")
+    logger.info("Detecting system architecture...")
+    arch = get_system_architecture()
+    if arch not in TUN2SOCKS_URLS:
+        raise RuntimeError(f"Unsupported architecture: {arch}")
+
+    logger.info(f"Downloading tun2socks binary for {arch}...")
     temp_path = os.path.join(tempfile.gettempdir(), "tun2socks.zip")
     
     try:
-        urllib.request.urlretrieve(TUN2SOCKS_URL_LINUX_ARM, temp_path)
-        # TODO: Add actual hash verification once we have the correct hash
-        # if not verify_download(temp_path, EXPECTED_HASH):
-        #     raise ValueError("Downloaded file hash mismatch")
+        urllib.request.urlretrieve(TUN2SOCKS_URLS[arch], temp_path)
         
-        shutil.move(temp_path, TUN2SOCKS_PATH)
-        os.chmod(TUN2SOCKS_PATH, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-        logger.info(f"tun2socks downloaded and installed to {TUN2SOCKS_PATH}")
+        # Extract the zip file
+        with zipfile.ZipFile(temp_path, 'r') as zip_ref:
+            # Extract to a temporary directory
+            temp_dir = tempfile.mkdtemp()
+            zip_ref.extractall(temp_dir)
+            
+            # Find the tun2socks binary in the extracted files
+            tun2socks_binary = None
+            for root, dirs, files in os.walk(temp_dir):
+                for file in files:
+                    if file.startswith('tun2socks'):
+                        tun2socks_binary = os.path.join(root, file)
+                        break
+                if tun2socks_binary:
+                    break
+            
+            if not tun2socks_binary:
+                raise RuntimeError("Could not find tun2socks binary in the downloaded package")
+            
+            # Move the binary to the final location
+            shutil.move(tun2socks_binary, TUN2SOCKS_PATH)
+            os.chmod(TUN2SOCKS_PATH, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            logger.info(f"tun2socks downloaded and installed to {TUN2SOCKS_PATH}")
+            
+            # Clean up
+            shutil.rmtree(temp_dir)
+            
     except Exception as e:
         logger.error(f"Failed to download tun2socks: {e}")
         if os.path.exists(temp_path):
             os.remove(temp_path)
         raise
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 def check_and_install_dependencies():
     """Check and install required dependencies."""
@@ -246,6 +304,35 @@ def setup_hotspot(hotspot_iface: str, ssid: str, password: str):
     logger.info("Setting up hotspot interface and services...")
 
     try:
+        # Check for DNS port conflict
+        try:
+            run("lsof -i :53", check=False)
+            logger.warning("Port 53 is in use. Attempting to resolve...")
+            
+            # Try to stop systemd-resolved
+            if run("systemctl is-active systemd-resolved", check=False).returncode == 0:
+                logger.info("Stopping systemd-resolved...")
+                run("systemctl stop systemd-resolved", check=False)
+                run("systemctl disable systemd-resolved", check=False)
+            
+            # Try to stop any other dnsmasq instances
+            if run("pgrep dnsmasq", check=False).returncode == 0:
+                logger.info("Stopping existing dnsmasq instances...")
+                run("systemctl stop dnsmasq", check=False)
+                run("pkill dnsmasq", check=False)
+            
+            # Wait for ports to be released
+            time.sleep(2)
+            
+            # Check if port is still in use
+            if run("lsof -i :53", check=False).returncode == 0:
+                logger.error("Port 53 is still in use. Please manually stop the service using port 53 and try again.")
+                logger.error("You can check what's using port 53 with: sudo lsof -i :53")
+                raise RuntimeError("DNS port 53 is in use")
+        except Exception as e:
+            logger.error(f"Failed to resolve DNS port conflict: {e}")
+            raise
+
         run(f"ip link set {hotspot_iface} down || true")
         run(f"ip addr flush dev {hotspot_iface} || true")
         run(f"ip link set {hotspot_iface} up")
@@ -272,6 +359,10 @@ rsn_pairwise=CCMP
         dnsmasq_conf = f"""
 interface={hotspot_iface}
 dhcp-range={DNS_RANGE}
+no-resolv
+no-poll
+server=8.8.8.8
+server=8.8.4.4
 """
         with temp_file(dnsmasq_conf.strip(), "dnsmasq.conf") as dnsmasq_conf_path:
             run(f"dnsmasq -C {dnsmasq_conf_path}")
