@@ -616,9 +616,8 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
             username, password = auth.split(':', 1)
             proxy_url = f"socks5://{username}:{password}@{address}"
         
-        # Create a temporary config file
-        config_content = f"""
-device: tun://{TUN_INTERFACE}
+        # Create a temporary config file with proper YAML format
+        config_content = f"""device: tun://{TUN_INTERFACE}
 interface: {TUN_INTERFACE}
 proxy: {proxy_url}
 mtu: 1500
@@ -635,7 +634,7 @@ log-rotate-compress: true
 log-rotate-compress-level: 6
 log-rotate-compress-algo: gzip
 log-rotate-compress-suffix: .gz
-log-rotate-compress-format: %Y%m%d%H%M%S
+log-rotate-compress-format: "%Y%m%d%H%M%S"
 log-rotate-compress-delay: 1h
 log-rotate-compress-max-age: 24h
 log-rotate-compress-max-size: 100MB
