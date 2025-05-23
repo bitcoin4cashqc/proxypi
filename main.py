@@ -606,23 +606,24 @@ def start_proxy(proxy_url: str, dns: str = DEFAULT_DNS):
         
         # Start redsocks for TCP forwarding
         redsocks_conf_path = "/etc/redsocks.conf"
-        redsocks_conf = f"""base {{
-    log_debug = on;
-    log_info = on;
-    log = "file:/tmp/redsocks.log";
-    daemon = off;
-    redirector = iptables;
-}}
-
-redsocks {{
-    local_ip = 0.0.0.0;
-    local_port = 12345;
-    ip = {host};
-    port = {port};
-    type = socks5;
-    login = "{username}";
-    password = "{password}";
-}}"""
+        redsocks_conf = (
+    "base {\n"
+    "    log_debug = on;\n"
+    "    log_info = on;\n"
+    "    log = \"file:/tmp/redsocks.log\";\n"
+    "    daemon = off;\n"
+    "    redirector = iptables;\n"
+    "}\n\n"
+    "redsocks {\n"
+    f"    local_ip = 0.0.0.0;\n"
+    f"    local_port = 12345;\n"
+    f"    ip = {host};\n"
+    f"    port = {port};\n"
+    f"    type = socks5;\n"
+    f"    login = \"{username}\";\n"
+    f"    password = \"{password}\";\n"
+    "}\n"
+)
         # Write the configuration file
         try:
             with open(redsocks_conf_path, "w") as f:
