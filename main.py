@@ -606,24 +606,40 @@ def start_proxy(proxy_url: str, dns: str = DEFAULT_DNS):
         
         # Start redsocks for TCP forwarding
         redsocks_conf_path = "/etc/redsocks.conf"
+        
+        # Check and stop any existing redsocks process
+        try:
+            logger.debug("Checking for existing redsocks process...")
+            run("pkill redsocks", check=False)
+            time.sleep(1)  # Wait for process to stop
+            
+            # Verify port is free
+            port_check = run("lsof -i :12345", check=False)
+            if port_check.returncode == 0:
+                logger.error("Port 12345 is still in use. Please check what's using it with: sudo lsof -i :12345")
+                raise RuntimeError("Port 12345 is still in use")
+        except Exception as e:
+            logger.error(f"Failed to stop existing redsocks process: {e}")
+            raise
+
         redsocks_conf = (
-    "base {\n"
-    "    log_debug = on;\n"
-    "    log_info = on;\n"
-    "    log = \"file:/tmp/redsocks.log\";\n"
-    "    daemon = off;\n"
-    "    redirector = iptables;\n"
-    "}\n\n"
-    "redsocks {\n"
-    f"    local_ip = 0.0.0.0;\n"
-    f"    local_port = 12345;\n"
-    f"    ip = {host};\n"
-    f"    port = {port};\n"
-    f"    type = socks5;\n"
-    f"    login = \"{username}\";\n"
-    f"    password = \"{password}\";\n"
-    "}\n"
-)
+            "base {\n"
+            "    log_debug = on;\n"
+            "    log_info = on;\n"
+            "    log = \"file:/tmp/redsocks.log\";\n"
+            "    daemon = off;\n"
+            "    redirector = iptables;\n"
+            "}\n\n"
+            "redsocks {\n"
+            f"    local_ip = 0.0.0.0;\n"
+            f"    local_port = 12345;\n"
+            f"    ip = {host};\n"
+            f"    port = {port};\n"
+            f"    type = socks5;\n"
+            f"    login = \"{username}\";\n"
+            f"    password = \"{password}\";\n"
+            "}\n"
+        )
         # Write the configuration file
         try:
             with open(redsocks_conf_path, "w") as f:
