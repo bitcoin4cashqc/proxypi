@@ -570,11 +570,8 @@ def setup_routing(hotspot_iface: str):
         # Redirect all TCP traffic to redsocks
         run("iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-ports 12345")
         
-        # Apply redsocks rules to hotspot traffic
-        run(f"iptables -t nat -A PREROUTING -i {hotspot_iface} -p tcp -j REDSOCKS")
-        
-        # Also apply to localhost traffic
-        run("iptables -t nat -A PREROUTING -i lo -p tcp -j REDSOCKS")
+        # Apply redsocks rules to all interfaces
+        run("iptables -t nat -A PREROUTING -p tcp -j REDSOCKS")
         
         # Log the rules
         logger.debug("Current iptables rules:")
