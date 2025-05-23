@@ -631,8 +631,20 @@ redsocks {
                 f.write(redsocks_conf.strip())
             logger.debug(f"Generated redsocks configuration:\n{redsocks_conf}")
             
-            # Start redsocks with debug output
-            cmd = "redsocks -d"
+            # Test the configuration first
+            test_cmd = "redsocks -t"
+            logger.debug(f"Testing redsocks configuration: {test_cmd}")
+            test_result = run(test_cmd, check=False)
+            if test_result.returncode != 0:
+                logger.error("Redsocks configuration test failed")
+                if test_result.stdout:
+                    logger.error(f"stdout: {test_result.stdout}")
+                if test_result.stderr:
+                    logger.error(f"stderr: {test_result.stderr}")
+                raise RuntimeError("Invalid redsocks configuration")
+            
+            # Start redsocks
+            cmd = "redsocks"
             logger.debug(f"Starting redsocks with command: {cmd}")
             
             # Start process with output capture
