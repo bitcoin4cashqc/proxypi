@@ -471,6 +471,10 @@ server=8.8.8.8
 server=8.8.4.4
 bind-interfaces
 listen-address={HOTSPOT_IP}
+cache-size=1000
+dns-forward-max=500
+log-queries
+log-dhcp
 """
         with temp_file(dnsmasq_conf.strip(), "dnsmasq.conf") as dnsmasq_conf_path:
             run(f"dnsmasq -C {dnsmasq_conf_path}")
@@ -539,7 +543,6 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
             auth, address = rest.split('@', 1)
             username, password = auth.split(':', 1)
             proxy_url = f"socks5://{username}:{password}@{address}"
-            logger.debug(f"Proxy URL with authentication: {proxy_url}")
         
         # Create a temporary config file
         config_content = f"""
@@ -549,6 +552,7 @@ proxy: {proxy_url}
 mtu: 1500
 tcp-auto-tuning: true
 loglevel: debug
+log-file: /tmp/tun2socks.log
 """
         logger.debug(f"Generated tun2socks configuration:\n{config_content}")
         with temp_file(config_content.strip(), "tun2socks.yaml") as config_path:
