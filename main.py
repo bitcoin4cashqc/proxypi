@@ -615,16 +615,13 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
             auth, address = rest.split('@', 1)
             username, password = auth.split(':', 1)
             host, port = address.split(':', 1)
-            proxy_url_for_config = f"socks5://{host}:{port}"
-            proxy_auth = f"{username}:{password}"
+            # Use the original proxy URL that includes authentication
+            proxy_url_for_config = proxy_url
         else:
             host, port = rest.split(':', 1)
             proxy_url_for_config = f"socks5://{host}:{port}"
-            proxy_auth = None
         
         logger.debug(f"Using proxy URL for config: {proxy_url_for_config}")
-        if proxy_auth:
-            logger.debug("Proxy authentication is configured")
         
         # Create a temporary config file with proper YAML format
         config_content = f"""device: tun://{TUN_INTERFACE}
@@ -661,11 +658,7 @@ tcp-keepalive-time: 60s
 """
         logger.debug(f"Generated tun2socks configuration:\n{config_content}")
         with temp_file(config_content.strip(), "tun2socks.yaml") as config_path:
-            # Build command with authentication if present
             cmd = f"{TUN2SOCKS_PATH} -config {config_path}"
-            if proxy_auth:
-                cmd += f" --proxy-auth {proxy_auth}"
-            
             logger.debug(f"Starting tun2socks with command: {cmd}")
             
             # Start process with output capture
