@@ -623,16 +623,6 @@ redsocks {{
     login = "{username}";
     password = "{password}";
 }}
-
-redudp {{
-    local_ip = 0.0.0.0;
-    local_port = 12345;
-    ip = {host};
-    port = {port};
-    type = socks5;
-    login = "{username}";
-    password = "{password}";
-}}
 """
         with temp_file(redsocks_conf.strip(), "redsocks.conf") as redsocks_conf_path:
             # Start redsocks
