@@ -614,12 +614,17 @@ def start_tun2socks(proxy_url: str, dns: str = DEFAULT_DNS):
         if '@' in rest:
             auth, address = rest.split('@', 1)
             username, password = auth.split(':', 1)
-            proxy_url = f"socks5://{username}:{password}@{address}"
+            # Use the original proxy_url that includes authentication
+            proxy_url_for_config = proxy_url
+        else:
+            proxy_url_for_config = proxy_url
+        
+        logger.debug(f"Using proxy URL for config: {proxy_url_for_config}")
         
         # Create a temporary config file with proper YAML format
         config_content = f"""device: tun://{TUN_INTERFACE}
 interface: {TUN_INTERFACE}
-proxy: {proxy_url}
+proxy: {proxy_url_for_config}
 mtu: 1500
 tcp-auto-tuning: true
 loglevel: debug
