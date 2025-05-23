@@ -90,18 +90,39 @@ def validate_proxy_url(url: str) -> bool:
         logger.error("Proxy URL must start with 'socks5://'")
         return False
     try:
-        # Basic format validation
-        parts = url[9:].split(":")
-        if len(parts) != 2:
-            logger.error("Proxy URL must be in format: socks5://host:port")
+        # Remove the protocol part
+        url = url[9:]
+        
+        # Check for authentication
+        if '@' in url:
+            auth, rest = url.split('@', 1)
+            if ':' not in auth:
+                logger.error("Invalid authentication format. Use: socks5://username:password@host:port")
+                return False
+            username, password = auth.split(':', 1)
+            if not username or not password:
+                logger.error("Username and password cannot be empty")
+                return False
+            url = rest
+        
+        # Check host and port
+        if ':' not in url:
+            logger.error("Port is required. Use: socks5://host:port")
             return False
-        port = int(parts[1])
+        
+        host, port = url.split(':', 1)
+        if not host:
+            logger.error("Host cannot be empty")
+            return False
+        
+        port = int(port)
         if not (1 <= port <= 65535):
             logger.error("Port must be between 1 and 65535")
             return False
+        
         return True
-    except Exception:
-        logger.error("Invalid proxy URL format")
+    except Exception as e:
+        logger.error(f"Invalid proxy URL format: {e}")
         return False
 
 @contextmanager
@@ -312,7 +333,8 @@ if __name__ == "__main__":
     download_tun2socks()
 
     parser = argparse.ArgumentParser(description="Raspberry Pi Wi-Fi Hotspot SOCKS5 Proxy Forwarder")
-    parser.add_argument("--proxy", required=True, help="SOCKS5 proxy URL (e.g., socks5://1.2.3.4:1080)")
+    parser.add_argument("--proxy", required=True, 
+                      help="SOCKS5 proxy URL (e.g., socks5://1.2.3.4:1080 or socks5://user:pass@1.2.3.4:1080)")
     parser.add_argument("--ssid", default="ProxyPi", help="Hotspot SSID (default ProxyPi)")
     parser.add_argument("--password", default="changeme123", help="Hotspot password (default changeme123)")
     parser.add_argument("--dns", default=DEFAULT_DNS, help=f"DNS server to use (default {DEFAULT_DNS})")
