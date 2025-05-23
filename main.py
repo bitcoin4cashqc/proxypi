@@ -390,17 +390,39 @@ def validate_proxy_connection(proxy_url: str) -> bool:
             host, port = rest.split(':', 1)
             proxy_arg = f"--proxy socks5://{host}:{port}"
         
-        # Try to connect to a known host
-        cmd = f"curl -s --connect-timeout 10 {proxy_arg} https://www.google.com"
-        logger.debug(f"Testing proxy with command: {cmd}")
-        result = run(cmd, check=False)
+        # Try multiple test URLs
+        test_urls = [
+            "https://www.google.com",
+            "https://www.cloudflare.com",
+            "https://1.1.1.1"
+        ]
         
-        if result.returncode == 0:
-            logger.info("Proxy connection test successful")
-            return True
-        else:
-            logger.error(f"Proxy connection test failed: {result.stderr}")
+        success = False
+        for url in test_urls:
+            cmd = f"curl -s --connect-timeout 10 --max-time 15 {proxy_arg} {url}"
+            logger.debug(f"Testing proxy with command: {cmd}")
+            result = run(cmd, check=False)
+            
+            if result.returncode == 0:
+                logger.info(f"Proxy connection test successful with {url}")
+                success = True
+                break
+            else:
+                logger.warning(f"Proxy connection test failed with {url}: {result.stderr}")
+        
+        if not success:
+            logger.error("All proxy connection tests failed")
             return False
+            
+        # Test DNS resolution through proxy
+        dns_cmd = f"curl -s --connect-timeout 10 --max-time 15 {proxy_arg} --dns-servers 8.8.8.8 https://www.google.com"
+        logger.debug(f"Testing DNS through proxy: {dns_cmd}")
+        dns_result = run(dns_cmd, check=False)
+        
+        if dns_result.returncode != 0:
+            logger.warning(f"DNS test through proxy failed: {dns_result.stderr}")
+        
+        return True
             
     except Exception as e:
         logger.error(f"Proxy validation failed: {e}")
@@ -602,9 +624,12 @@ log-rotate-compress-max-files: 10
 log-rotate-compress-max-total-size: 1GB
 log-rotate-compress-max-total-files: 100
 log-rotate-compress-max-total-age: 168h
-log-rotate-compress-max-total-size: 1GB
-log-rotate-compress-max-total-files: 100
-log-rotate-compress-max-total-age: 168h
+tcp-timeout: 300s
+udp-timeout: 60s
+tcp-keepalive: 30s
+tcp-keepalive-probes: 3
+tcp-keepalive-interval: 10s
+tcp-keepalive-time: 60s
 """
         logger.debug(f"Generated tun2socks configuration:\n{config_content}")
         with temp_file(config_content.strip(), "tun2socks.yaml") as config_path:
