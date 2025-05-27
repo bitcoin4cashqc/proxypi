@@ -186,13 +186,46 @@ logger_stdout_level=2
         # Create a unique temporary file with a specific name
         timestamp = int(time.time())
         path = f"/tmp/hostapd_{timestamp}.conf"
-        self.temp_files.append(path)
         
-        with open(path, 'w') as f:
-            f.write(config_content)
-        
-        self.logger.info(f"Created hostapd config: {path}")
-        return path
+        try:
+            # Create the file with proper permissions
+            with open(path, 'w') as f:
+                f.write(config_content)
+            
+            # Set permissions to 644 (read/write for owner, read for others)
+            os.chmod(path, 0o644)
+            
+            # Verify the file exists and has correct permissions
+            if not os.path.exists(path):
+                raise Exception(f"Failed to create hostapd config file at {path}")
+            
+            # Verify file contents
+            with open(path, 'r') as f:
+                content = f.read()
+                if not content.strip():
+                    raise Exception("Created hostapd config file is empty")
+            
+            print(f"Created hostapd config file: {path}", flush=True)
+            print(f"File permissions: {oct(os.stat(path).st_mode)[-3:]}", flush=True)
+            print(f"File contents:\n{config_content}", flush=True)
+            
+            self.temp_files.append(path)
+            return path
+            
+        except Exception as e:
+            print(f"Error creating hostapd config file: {e}", flush=True)
+            # Try fallback to a different location
+            try:
+                fallback_path = f"/tmp/hostapd_fallback_{timestamp}.conf"
+                with open(fallback_path, 'w') as f:
+                    f.write(config_content)
+                os.chmod(fallback_path, 0o644)
+                print(f"Created fallback hostapd config file: {fallback_path}", flush=True)
+                self.temp_files.append(fallback_path)
+                return fallback_path
+            except Exception as e2:
+                print(f"Fallback also failed: {e2}", flush=True)
+                raise Exception(f"Could not create hostapd config file: {e}")
     
     def _create_dnsmasq_config(self):
         """Create dnsmasq configuration file"""
