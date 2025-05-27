@@ -133,6 +133,6 @@ if __name__ == "__main__":
     print(f"Starting hotspot on {AP_IFACE} using internet from {INTERNET_IFACE}")
     hostapd, dnsmasq = setup_hotspot()
     tun2socks = setup_routing()
-
+    
     print("Hotspot running. Press Ctrl+C to stop.")
     signal.pause()
