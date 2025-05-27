@@ -129,14 +129,9 @@ if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
     # For now, let's use a direct connection approach
     echo "Setting up authenticated SOCKS5 connection..."
     
-    # Create a simple SOCKS5 forwarder using socat if available
-    if command -v socat &> /dev/null; then
-        socat TCP-LISTEN:$LOCAL_SOCKS_PORT,reuseaddr,fork SOCKS5:$PROXY_IP:0.0.0.0:0,socksport=$PROXY_PORT,socksuser=$PROXY_USER,sockspass=$PROXY_PASS &
-        SSH_TUNNEL_PID=$!
-    else
-        echo "Warning: socat not found. Using direct connection without local forwarding."
-        LOCAL_SOCKS_PORT=$PROXY_PORT
-    fi
+    # Use direct connection with authentication in tun2socks
+    echo "Using direct SOCKS5 connection with authentication."
+    SSH_TUNNEL_PID=""
 else
     # For non-authenticated SOCKS5, create a simple port forward
     ssh -f -N -D $LOCAL_SOCKS_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null localhost &
@@ -146,10 +141,10 @@ fi
 sleep 2
 
 echo "Starting tun2socks-linux-arm64..."
-if [[ -n "$SSH_TUNNEL_PID" ]]; then
-    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://127.0.0.1:$LOCAL_SOCKS_PORT -interface $INET_IF &
-else
+if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
     tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT -interface $INET_IF &
+else
+    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_IP:$PROXY_PORT -interface $INET_IF &
 fi
 TUN2SOCKS_PID=$!
 
