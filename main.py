@@ -63,10 +63,17 @@ class WiFiSOCKS5Router:
             else:
                 result = subprocess.run(cmd, check=check, 
                                       capture_output=capture_output, text=True)
+            
+            # Log command output
+            if result.stdout:
+                self.logger.debug(f"Command output: {result.stdout}")
+            if result.stderr:
+                self.logger.debug(f"Command errors: {result.stderr}")
+                
             return result
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Command failed: {cmd}")
-            self.logger.error(f"Error: {e.stderr if hasattr(e, 'stderr') else str(e)}")
+            self.logger.error(f"Error output: {e.stderr if hasattr(e, 'stderr') else str(e)}")
             raise
     
     def _check_root(self):
@@ -257,6 +264,26 @@ redsocks {{
         self.logger.info(f"Redsocks configured with config: {path}")
         return path
     
+    def _check_port_53(self):
+        """Check if port 53 is in use and free it"""
+        self.logger.info("Checking port 53...")
+        try:
+            # Check if port 53 is in use
+            result = self._run_command("lsof -i :53", check=False)
+            if result.stdout:
+                self.logger.warning("Port 53 is in use. Attempting to free it...")
+                # Stop systemd-resolved
+                self._run_command("systemctl stop systemd-resolved", check=False)
+                self._run_command("systemctl disable systemd-resolved", check=False)
+                # Stop dnsmasq if running
+                self._run_command("systemctl stop dnsmasq", check=False)
+                # Kill any remaining processes on port 53
+                self._run_command("fuser -k 53/udp", check=False)
+                self._run_command("fuser -k 53/tcp", check=False)
+                time.sleep(2)  # Give it time to free up
+        except Exception as e:
+            self.logger.error(f"Error checking port 53: {e}")
+    
     def start_services(self):
         """Start hotspot and routing services"""
         self._check_root()
@@ -266,9 +293,8 @@ redsocks {{
         
         self.logger.info("Starting WiFi hotspot with SOCKS5 routing...")
         
-        # Stop conflicting services
-        self._run_command("systemctl stop hostapd", check=False)
-        self._run_command("systemctl stop dnsmasq", check=False)
+        # Stop conflicting services and free port 53
+        self._check_port_53()
         
         # Setup network interface
         self._setup_interface()
@@ -283,17 +309,42 @@ redsocks {{
         # Setup redsocks for SOCKS5
         self._setup_redsocks()
         
-        # Start dnsmasq
+        # Start dnsmasq with debug output
         self.logger.info("Starting dnsmasq...")
-        self._run_command(f"dnsmasq -C {dnsmasq_config} -d &", check=False)
-        self.services_started.append("dnsmasq")
-        time.sleep(2)
+        try:
+            # Run dnsmasq in foreground with debug output
+            self._run_command(f"dnsmasq -C {dnsmasq_config} -d --log-debug --log-queries", check=False)
+            self.services_started.append("dnsmasq")
+            
+            # Verify dnsmasq is running
+            time.sleep(2)
+            result = self._run_command("pgrep dnsmasq", check=False)
+            if not result.stdout:
+                raise Exception("dnsmasq failed to start")
+                
+            self.logger.info("dnsmasq started successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to start dnsmasq: {e}")
+            self.cleanup()
+            sys.exit(1)
         
         # Start hostapd
         self.logger.info("Starting hostapd...")
-        self._run_command(f"hostapd {hostapd_config} &", check=False)
-        self.services_started.append("hostapd")
-        time.sleep(5)
+        try:
+            self._run_command(f"hostapd {hostapd_config} &", check=False)
+            self.services_started.append("hostapd")
+            time.sleep(5)
+            
+            # Verify hostapd is running
+            result = self._run_command("pgrep hostapd", check=False)
+            if not result.stdout:
+                raise Exception("hostapd failed to start")
+                
+            self.logger.info("hostapd started successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to start hostapd: {e}")
+            self.cleanup()
+            sys.exit(1)
         
         self.logger.info("="*50)
         self.logger.info(f"WiFi Hotspot Started!")
@@ -314,9 +365,14 @@ redsocks {{
         # Stop services
         if "hostapd" in self.services_started:
             self._run_command("pkill hostapd", check=False)
+            self._run_command("systemctl stop hostapd", check=False)
         
         if "dnsmasq" in self.services_started:
             self._run_command("pkill dnsmasq", check=False)
+            self._run_command("systemctl stop dnsmasq", check=False)
+            # Free port 53
+            self._run_command("fuser -k 53/udp", check=False)
+            self._run_command("fuser -k 53/tcp", check=False)
         
         if "redsocks" in self.services_started:
             self._run_command("pkill redsocks", check=False)
