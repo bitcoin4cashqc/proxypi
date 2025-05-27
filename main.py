@@ -139,15 +139,27 @@ rsn_pairwise=CCMP
     def _create_dnsmasq_config(self):
         """Create dnsmasq configuration file"""
         config_content = f"""
+# Basic configuration
 interface={self.hotspot_interface}
+bind-interfaces
+listen-address={self.hotspot_ip}
+no-resolv
+no-poll
+strict-order
+
+# DHCP configuration
 dhcp-range={self.dhcp_range_start},{self.dhcp_range_end},255.255.255.0,24h
 dhcp-option=3,{self.hotspot_ip}
 dhcp-option=6,8.8.8.8,8.8.4.4
+
+# DNS configuration
 server=8.8.8.8
 server=8.8.4.4
+
+# Logging
 log-queries
 log-dhcp
-listen-address={self.hotspot_ip}
+log-facility=/tmp/dnsmasq.log
 """
         
         fd, path = tempfile.mkstemp(suffix='.conf', prefix='dnsmasq_')
@@ -312,17 +324,46 @@ redsocks {{
         # Start dnsmasq with debug output
         self.logger.info("Starting dnsmasq...")
         try:
-            # Run dnsmasq in foreground with debug output
-            self._run_command(f"dnsmasq -C {dnsmasq_config} -d --log-debug --log-queries", check=False)
-            self.services_started.append("dnsmasq")
+            # First, verify the config file
+            self._run_command(f"dnsmasq --test -C {dnsmasq_config}")
+            self.logger.info("dnsmasq config test passed")
             
-            # Verify dnsmasq is running
+            # Start dnsmasq in foreground with debug output
+            dnsmasq_cmd = f"dnsmasq -C {dnsmasq_config} -d --log-debug --log-queries --no-daemon"
+            self.logger.info(f"Running dnsmasq command: {dnsmasq_cmd}")
+            
+            # Run dnsmasq in a way that we can see its output
+            process = subprocess.Popen(
+                dnsmasq_cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Give it a moment to start
             time.sleep(2)
+            
+            # Check if it's running
             result = self._run_command("pgrep dnsmasq", check=False)
             if not result.stdout:
+                # Get any output from the process
+                stdout, stderr = process.communicate()
+                if stdout:
+                    self.logger.error(f"dnsmasq stdout: {stdout}")
+                if stderr:
+                    self.logger.error(f"dnsmasq stderr: {stderr}")
                 raise Exception("dnsmasq failed to start")
-                
+            
+            self.services_started.append("dnsmasq")
             self.logger.info("dnsmasq started successfully")
+            
+            # Check dnsmasq log file
+            if os.path.exists("/tmp/dnsmasq.log"):
+                with open("/tmp/dnsmasq.log", "r") as f:
+                    log_content = f.read()
+                    self.logger.debug(f"dnsmasq log content: {log_content}")
+            
         except Exception as e:
             self.logger.error(f"Failed to start dnsmasq: {e}")
             self.cleanup()
