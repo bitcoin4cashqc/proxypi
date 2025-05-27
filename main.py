@@ -524,6 +524,7 @@ redsocks {{
         self.logger.info("Starting hostapd...")
         try:
             # First, verify the config file
+            print(f"Testing hostapd config: {hostapd_config}", flush=True)
             self._run_command(f"hostapd -dd {hostapd_config}")
             print("hostapd config test passed", flush=True)
             self.logger.info("hostapd config test passed")
