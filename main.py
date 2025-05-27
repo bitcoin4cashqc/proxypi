@@ -328,14 +328,22 @@ no-resolv
         
         try:
             # Test configuration if provided
-            if config_file and name == "hostapd":
-                test_cmd = f"hostapd -t {config_file}"
+            if config_file:
+                if name == "hostapd":
+                    test_cmd = f"hostapd -t {config_file}"
+                elif name == "redsocks":
+                    test_cmd = f"redsocks -t -c {config_file}"
+                elif name == "dnsmasq":
+                    test_cmd = f"dnsmasq --test -C {config_file}"
+                
+                print(f"Testing {name} config with: {test_cmd}", flush=True)
                 result = self._run_command(test_cmd, timeout=10)
                 if result.returncode != 0:
-                    raise Exception(f"{name} configuration test failed")
-                self.logger.info(f"{name} configuration test passed")
+                    raise Exception(f"{name} configuration test failed: {result.stderr}")
+                print(f"{name} configuration test passed", flush=True)
             
-            # Start the process
+            # Start the process with full output capture
+            print(f"Starting {name} with command: {cmd}", flush=True)
             process = subprocess.Popen(
                 cmd,
                 shell=True,
@@ -352,10 +360,12 @@ no-resolv
             # Check if process is running
             if process.poll() is not None:
                 output, _ = process.communicate()
-                raise Exception(f"{name} failed to start. Output: {output}")
+                print(f"{name} failed to start. Output:", flush=True)
+                print(output, flush=True)
+                raise Exception(f"{name} failed to start. See output above.")
             
             self.processes[name] = process
-            self.logger.info(f"{name} started successfully (PID: {process.pid})")
+            print(f"{name} started successfully (PID: {process.pid})", flush=True)
             
             # Start output monitoring thread
             def monitor_output():
@@ -363,6 +373,7 @@ no-resolv
                     try:
                         line = process.stdout.readline()
                         if line:
+                            print(f"{name}: {line.strip()}", flush=True)
                             self.logger.debug(f"{name}: {line.strip()}")
                     except:
                         break
@@ -373,6 +384,7 @@ no-resolv
             return process
             
         except Exception as e:
+            print(f"Failed to start {name}: {e}", flush=True)
             self.logger.error(f"Failed to start {name}: {e}")
             raise
     
@@ -383,11 +395,13 @@ no-resolv
         self._install_packages()
         self._stop_conflicting_services()
         
+        print("Starting WiFi hotspot with SOCKS5 routing...", flush=True)
         self.logger.info("Starting WiFi hotspot with SOCKS5 routing...")
         self.running = True
         
         # Check SOCKS5 proxy
         if not self._check_socks5():
+            print("WARNING: SOCKS5 proxy is not accessible. Traffic may not be proxied properly.", flush=True)
             self.logger.warning("SOCKS5 proxy is not accessible. Traffic may not be proxied properly.")
         
         # Setup network
@@ -402,17 +416,21 @@ no-resolv
         # Start services in order
         try:
             # Start redsocks first
+            print("\nStarting redsocks...", flush=True)
             self._start_process("redsocks", f"redsocks -c {redsocks_config}", redsocks_config)
             time.sleep(2)
             
             # Start dnsmasq
+            print("\nStarting dnsmasq...", flush=True)
             self._start_process("dnsmasq", f"dnsmasq -C {dnsmasq_config} -d", dnsmasq_config)
             time.sleep(2)
             
             # Start hostapd last
+            print("\nStarting hostapd...", flush=True)
             self._start_process("hostapd", f"hostapd {hostapd_config}", hostapd_config)
             time.sleep(5)
             
+            print("\nAll services started successfully", flush=True)
             self.logger.info("All services started successfully")
             
             print("=" * 60)
@@ -433,6 +451,7 @@ no-resolv
             return True
             
         except Exception as e:
+            print(f"\nFailed to start services: {e}", flush=True)
             self.logger.error(f"Failed to start services: {e}")
             self.cleanup()
             return False
