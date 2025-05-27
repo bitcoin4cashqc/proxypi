@@ -127,15 +127,60 @@ def validate_proxy_connection(host: str, port: int, username: Optional[str] = No
         if username and password:
             proxy_url = f"socks5://{username}:{password}@{host}:{port}"
         
+        logger.info(f"Testing proxy connection to {host}:{port}...")
+        
+        # Test with a simple HTTP request
         result = subprocess.run([
             'curl', '--proxy', proxy_url, '--connect-timeout', '10',
             '--silent', '--output', '/dev/null', '--write-out', '%{http_code}',
             'https://www.google.com'
         ], capture_output=True, text=True, timeout=15)
         
-        return result.returncode == 0 and result.stdout.strip() == '200'
+        if result.returncode == 0 and result.stdout.strip() == '200':
+            logger.info("Proxy connection test successful")
+            return True
+        else:
+            logger.error(f"Proxy test failed. Return code: {result.returncode}, HTTP code: {result.stdout.strip()}")
+            if result.stderr:
+                logger.error(f"Curl error: {result.stderr}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        logger.error("Proxy connection test timed out")
+        return False
     except Exception as e:
         logger.error(f"Proxy validation failed: {e}")
+        return False
+
+
+def test_tun2socks_binary(tun2socks_path: str) -> bool:
+    """Test if tun2socks binary is working"""
+    try:
+        # Test if binary exists and is executable
+        if not os.path.exists(tun2socks_path):
+            logger.error(f"tun2socks binary not found at {tun2socks_path}")
+            return False
+        
+        if not os.access(tun2socks_path, os.X_OK):
+            logger.error(f"tun2socks binary is not executable: {tun2socks_path}")
+            return False
+        
+        # Test if binary can run (check version)
+        result = subprocess.run([tun2socks_path, '-version'], 
+                              capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            logger.info(f"tun2socks binary test successful: {result.stdout.strip()}")
+            return True
+        else:
+            logger.error(f"tun2socks binary test failed: {result.stderr}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        logger.error("tun2socks binary test timed out")
+        return False
+    except Exception as e:
+        logger.error(f"tun2socks binary test failed: {e}")
         return False
 
 
@@ -317,7 +362,7 @@ def setup_tun2socks(tun2socks_path: str, proxy_host: str, proxy_port: int,
     config = {
         'interface': 'tun0',
         'proxy': f'socks5://{proxy_host}:{proxy_port}',
-        'loglevel': 'info'
+        'loglevel': 'debug'  # Changed to debug for more verbose logging
     }
     
     if username and password:
@@ -326,32 +371,74 @@ def setup_tun2socks(tun2socks_path: str, proxy_host: str, proxy_port: int,
     config_file = create_temp_file(json.dumps(config, indent=2), '.json')
     
     logger.info(f"Starting tun2socks with proxy {proxy_host}:{proxy_port}")
+    logger.debug(f"tun2socks config: {json.dumps(config, indent=2)}")
     
     # Start tun2socks with config file
     cmd = [tun2socks_path, '-config', config_file]
     
-    with open('/tmp/tun2socks.log', 'w') as log_file:
+    log_file_path = '/tmp/tun2socks.log'
+    with open(log_file_path, 'w') as log_file:
         process = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
     
     processes.append(process)
     
-    # Wait for TUN interface to be ready
-    for i in range(10):
+    # Wait a bit and check if process is still running
+    time.sleep(2)
+    if process.poll() is not None:
+        # Process died, read the log file for error details
         try:
+            with open(log_file_path, 'r') as f:
+                log_content = f.read()
+            logger.error(f"tun2socks failed to start. Log content:\n{log_content}")
+            
+            # Check for common issues
+            if "permission denied" in log_content.lower():
+                raise ProxyPiError("tun2socks permission denied - check if binary is executable")
+            elif "connection refused" in log_content.lower():
+                raise ProxyPiError("SOCKS5 proxy connection refused - check proxy host/port")
+            elif "authentication failed" in log_content.lower():
+                raise ProxyPiError("SOCKS5 proxy authentication failed - check username/password")
+            elif "no such file" in log_content.lower():
+                raise ProxyPiError("tun2socks binary not found or corrupted")
+            else:
+                raise ProxyPiError(f"tun2socks failed to start: {log_content.strip()}")
+        except FileNotFoundError:
+            raise ProxyPiError("tun2socks failed to start and no log file was created")
+    
+    # Wait for TUN interface to be ready
+    logger.info("Waiting for tun2socks to initialize...")
+    for i in range(15):  # Increased timeout
+        try:
+            # Check if process is still running
+            if process.poll() is not None:
+                # Read log file for error details
+                try:
+                    with open(log_file_path, 'r') as f:
+                        log_content = f.read()
+                    logger.error(f"tun2socks died during initialization. Log:\n{log_content}")
+                except FileNotFoundError:
+                    pass
+                raise ProxyPiError("tun2socks process died during initialization")
+            
+            # Check if TUN interface is working
             result = subprocess.run(['ip', 'route', 'get', '8.8.8.8'], 
                                   capture_output=True, text=True, timeout=5)
             if 'tun0' in result.stdout:
-                logger.info("tun2socks is ready")
+                logger.info("tun2socks is ready and routing is working")
                 break
         except subprocess.TimeoutExpired:
+            logger.debug(f"Route check timeout on attempt {i+1}")
             pass
-        
-        if process.poll() is not None:
-            raise ProxyPiError("tun2socks process died")
         
         time.sleep(1)
     else:
-        logger.warning("tun2socks may not be fully ready")
+        # Final check - read current log content
+        try:
+            with open(log_file_path, 'r') as f:
+                log_content = f.read()
+            logger.warning(f"tun2socks may not be fully ready. Current log:\n{log_content}")
+        except FileNotFoundError:
+            logger.warning("tun2socks may not be fully ready and no log file found")
     
     return process
 
@@ -457,6 +544,12 @@ def main():
         proxy_host, proxy_port, proxy_username, proxy_password = parse_proxy_url(args.proxy)
         logger.info(f"Using proxy: {proxy_host}:{proxy_port}")
         
+        # Log authentication info (without exposing password)
+        if proxy_username:
+            logger.info(f"Using proxy authentication with username: {proxy_username}")
+        else:
+            logger.info("No proxy authentication configured")
+        
         # Validate proxy connection
         if not validate_proxy_connection(proxy_host, proxy_port, proxy_username, proxy_password):
             raise ProxyPiError("Cannot connect to SOCKS5 proxy")
@@ -470,6 +563,10 @@ def main():
         
         # Download tun2socks
         tun2socks_path = download_tun2socks()
+        
+        # Test tun2socks binary
+        if not test_tun2socks_binary(tun2socks_path):
+            raise ProxyPiError("tun2socks binary test failed")
         
         # Get wireless interfaces
         interfaces = get_wireless_interfaces()
