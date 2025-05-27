@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WiFi Hotspot with SOCKS5 Proxy Router
+Optimized WiFi Hotspot with SOCKS5 Proxy Router
 Raspberry Pi 4 tool to create hotspot and route traffic through SOCKS5 proxy
 """
 
@@ -13,6 +13,7 @@ import time
 import logging
 import argparse
 import socket
+import threading
 from pathlib import Path
 
 class WiFiSOCKS5Router:
@@ -35,9 +36,10 @@ class WiFiSOCKS5Router:
         self.dhcp_range_end = "192.168.4.20"
         self.subnet = "192.168.4.0/24"
         
-        # Temporary files
+        # Process management
         self.temp_files = []
-        self.services_started = []
+        self.processes = {}
+        self.running = False
         
         # Setup logging
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -50,36 +52,38 @@ class WiFiSOCKS5Router:
     def _signal_handler(self, signum, frame):
         """Handle cleanup on signal"""
         self.logger.info(f"Received signal {signum}, cleaning up...")
+        self.running = False
         self.cleanup()
         sys.exit(0)
     
-    def _run_command(self, cmd, check=True, capture_output=True):
-        """Run shell command with error handling"""
+    def _run_command(self, cmd, check=True, capture_output=True, timeout=30):
+        """Run shell command with error handling and timeout"""
         self.logger.debug(f"Running: {cmd}")
         try:
             if isinstance(cmd, str):
                 result = subprocess.run(cmd, shell=True, check=check, 
                                       capture_output=capture_output, text=True,
-                                      bufsize=1, universal_newlines=True)
+                                      timeout=timeout)
             else:
                 result = subprocess.run(cmd, check=check, 
                                       capture_output=capture_output, text=True,
-                                      bufsize=1, universal_newlines=True)
+                                      timeout=timeout)
             
-            # Log command output immediately
-            if result.stdout:
-                print(f"Command output: {result.stdout}", flush=True)
-                self.logger.debug(f"Command output: {result.stdout}")
-            if result.stderr:
-                print(f"Command errors: {result.stderr}", flush=True)
-                self.logger.error(f"Command errors: {result.stderr}")
+            if result.stdout and capture_output:
+                self.logger.debug(f"Command output: {result.stdout.strip()}")
+            if result.stderr and capture_output:
+                self.logger.warning(f"Command stderr: {result.stderr.strip()}")
                 
             return result
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"Command timed out: {cmd}")
+            raise
         except subprocess.CalledProcessError as e:
-            print(f"Command failed: {cmd}", flush=True)
-            print(f"Error output: {e.stderr if hasattr(e, 'stderr') else str(e)}", flush=True)
             self.logger.error(f"Command failed: {cmd}")
-            self.logger.error(f"Error output: {e.stderr if hasattr(e, 'stderr') else str(e)}")
+            if hasattr(e, 'stderr') and e.stderr:
+                self.logger.error(f"Error output: {e.stderr}")
+            if not check:
+                return e
             raise
     
     def _check_root(self):
@@ -89,74 +93,27 @@ class WiFiSOCKS5Router:
             sys.exit(1)
     
     def _check_interfaces(self):
-        """Check if network interfaces exist and initialize them if needed"""
-        print("Checking network interfaces...", flush=True)
+        """Check if network interfaces exist"""
         interfaces = os.listdir('/sys/class/net/')
         
-        # Check and initialize hotspot interface
         if self.hotspot_interface not in interfaces:
-            print(f"Hotspot interface {self.hotspot_interface} not found, attempting to initialize...", flush=True)
-            try:
-                # Try to bring up the interface
-                self._run_command(f"ip link set {self.hotspot_interface} up", check=False)
-                time.sleep(2)  # Give it time to initialize
-                
-                # Check if it's up now
-                interfaces = os.listdir('/sys/class/net/')
-                if self.hotspot_interface not in interfaces:
-                    print(f"Failed to initialize {self.hotspot_interface}", flush=True)
-                    print("Please check if your WiFi adapter is properly connected", flush=True)
-                    print("You can check available interfaces with: ip link show", flush=True)
-                    sys.exit(1)
-            except Exception as e:
-                print(f"Error initializing {self.hotspot_interface}: {e}", flush=True)
-                sys.exit(1)
+            self.logger.error(f"Hotspot interface {self.hotspot_interface} not found")
+            self.logger.info("Available interfaces: " + ", ".join(interfaces))
+            sys.exit(1)
         
-        # Check internet interface
         if self.internet_interface not in interfaces:
-            print(f"Internet interface {self.internet_interface} not found", flush=True)
-            print("Please check if your WiFi adapter is properly connected", flush=True)
-            print("You can check available interfaces with: ip link show", flush=True)
+            self.logger.error(f"Internet interface {self.internet_interface} not found")
+            self.logger.info("Available interfaces: " + ", ".join(interfaces))
             sys.exit(1)
         
-        # Verify interfaces are up
+        # Check interface capabilities
         try:
-            # Check hotspot interface
-            result = self._run_command(f"ip link show {self.hotspot_interface}", check=False)
-            if "state DOWN" in result.stdout:
-                print(f"Bringing up {self.hotspot_interface}...", flush=True)
-                self._run_command(f"ip link set {self.hotspot_interface} up")
-                time.sleep(2)  # Give it time to initialize
-            
-            # Check internet interface
-            result = self._run_command(f"ip link show {self.internet_interface}", check=False)
-            if "state DOWN" in result.stdout:
-                print(f"Bringing up {self.internet_interface}...", flush=True)
-                self._run_command(f"ip link set {self.internet_interface} up")
-                time.sleep(2)  # Give it time to initialize
-                
-        except Exception as e:
-            print(f"Error checking interface status: {e}", flush=True)
-            sys.exit(1)
+            result = self._run_command(f"iw {self.hotspot_interface} info")
+            self.logger.debug(f"Interface {self.hotspot_interface} info: {result.stdout}")
+        except:
+            self.logger.warning(f"Could not get info for {self.hotspot_interface}")
         
-        print(f"Using {self.hotspot_interface} for hotspot, {self.internet_interface} for internet", flush=True)
-        
-        # Print interface details for debugging
-        self._run_command(f"ip link show {self.hotspot_interface}")
-        self._run_command(f"ip link show {self.internet_interface}")
-        
-        # Check if interface supports AP mode
-        print("Checking if interface supports AP mode...", flush=True)
-        try:
-            result = self._run_command(f"iw {self.hotspot_interface} info", check=False)
-            print(f"Interface info:\n{result.stdout}", flush=True)
-            
-            if "type AP" not in result.stdout:
-                print("Warning: Interface may not support AP mode", flush=True)
-                print("Checking available modes...", flush=True)
-                self._run_command(f"iw list | grep -A 10 'Supported interface modes'")
-        except Exception as e:
-            print(f"Warning: Could not check interface capabilities: {e}", flush=True)
+        self.logger.info(f"Using {self.hotspot_interface} for hotspot, {self.internet_interface} for internet")
     
     def _check_socks5(self):
         """Check if SOCKS5 proxy is accessible"""
@@ -167,41 +124,87 @@ class WiFiSOCKS5Router:
             sock.close()
             if result != 0:
                 self.logger.warning(f"SOCKS5 proxy at {self.socks5_host}:{self.socks5_port} is not accessible")
-                self.logger.warning("Make sure your SOCKS5 proxy is running before starting the hotspot")
+                return False
             else:
                 self.logger.info(f"SOCKS5 proxy at {self.socks5_host}:{self.socks5_port} is accessible")
+                return True
         except Exception as e:
             self.logger.warning(f"Could not check SOCKS5 proxy: {e}")
+            return False
+    
+    def _install_packages(self):
+        """Install required packages"""
+        packages = ["hostapd", "dnsmasq", "redsocks", "iptables-persistent"]
+        
+        self.logger.info("Checking required packages...")
+        missing_packages = []
+        
+        for package in packages:
+            try:
+                self._run_command(f"dpkg -l {package} | grep -q '^ii'")
+            except subprocess.CalledProcessError:
+                missing_packages.append(package)
+        
+        if missing_packages:
+            self.logger.info(f"Installing missing packages: {', '.join(missing_packages)}")
+            self._run_command("apt-get update")
+            for package in missing_packages:
+                self._run_command(f"apt-get install -y {package}")
+    
+    def _stop_conflicting_services(self):
+        """Stop services that might conflict"""
+        services_to_stop = ["hostapd", "dnsmasq", "systemd-resolved"]
+        
+        for service in services_to_stop:
+            try:
+                self._run_command(f"systemctl stop {service}", check=False)
+                self._run_command(f"systemctl disable {service}", check=False)
+            except:
+                pass
+        
+        # Kill any processes using port 53
+        self._run_command("fuser -k 53/udp", check=False)
+        self._run_command("fuser -k 53/tcp", check=False)
+        
+        # Kill existing hostapd and dnsmasq processes
+        self._run_command("pkill -f hostapd", check=False)
+        self._run_command("pkill -f dnsmasq", check=False)
+        self._run_command("pkill -f redsocks", check=False)
+        
+        time.sleep(2)
     
     def _setup_interface(self):
         """Configure hotspot interface"""
         self.logger.info("Setting up hotspot interface...")
         
-        # Bring interface down
-        self._run_command(f"ip link set {self.hotspot_interface} down")
+        # Reset interface
+        self._run_command(f"ip link set {self.hotspot_interface} down", check=False)
+        self._run_command(f"ip addr flush dev {self.hotspot_interface}", check=False)
         
-        # Set IP address
-        self._run_command(f"ip addr flush dev {self.hotspot_interface}")
+        # Configure interface
         self._run_command(f"ip addr add {self.hotspot_ip}/24 dev {self.hotspot_interface}")
-        
-        # Bring interface up
         self._run_command(f"ip link set {self.hotspot_interface} up")
         
         self.logger.info(f"Interface {self.hotspot_interface} configured with IP {self.hotspot_ip}")
     
     def _setup_iptables(self):
-        """Setup iptables rules for SOCKS5 routing"""
+        """Setup iptables rules for routing and SOCKS5"""
         self.logger.info("Setting up iptables rules...")
         
         # Enable IP forwarding
         self._run_command("echo 1 > /proc/sys/net/ipv4/ip_forward")
         
         # Clear existing rules
-        self._run_command("iptables -t nat -F")
-        self._run_command("iptables -t mangle -F")
-        self._run_command("iptables -F")
+        self._run_command("iptables -F", check=False)
+        self._run_command("iptables -t nat -F", check=False)
+        self._run_command("iptables -t mangle -F", check=False)
         
-        # Allow traffic on loopback
+        # Set default policies
+        self._run_command("iptables -P INPUT ACCEPT")
+        self._run_command("iptables -P FORWARD ACCEPT")
+        self._run_command("iptables -P OUTPUT ACCEPT")
+        
+        # Allow loopback
         self._run_command("iptables -A INPUT -i lo -j ACCEPT")
         self._run_command("iptables -A OUTPUT -o lo -j ACCEPT")
         
@@ -213,51 +216,28 @@ class WiFiSOCKS5Router:
         self._run_command(f"iptables -A INPUT -i {self.hotspot_interface} -j ACCEPT")
         self._run_command(f"iptables -A FORWARD -i {self.hotspot_interface} -j ACCEPT")
         
-        # NAT for internet access (fallback)
+        # NAT for internet access
         self._run_command(f"iptables -t nat -A POSTROUTING -o {self.internet_interface} -j MASQUERADE")
         
-        # Mark packets from hotspot subnet for SOCKS5 routing
-        self._run_command(f"iptables -t mangle -A OUTPUT -s {self.subnet} -j MARK --set-mark 1")
+        # Redirect HTTP/HTTPS traffic to redsocks
+        self._run_command(f"iptables -t nat -A PREROUTING -i {self.hotspot_interface} -p tcp --dport 80 -j REDIRECT --to-ports 12345")
+        self._run_command(f"iptables -t nat -A PREROUTING -i {self.hotspot_interface} -p tcp --dport 443 -j REDIRECT --to-ports 12345")
+        
+        # Redirect all other TCP traffic to redsocks (optional - for full proxy)
+        self._run_command(f"iptables -t nat -A PREROUTING -i {self.hotspot_interface} -p tcp -j REDIRECT --to-ports 12345")
         
         self.logger.info("iptables rules configured")
     
-    def _install_packages(self):
-        """Install required packages"""
-        packages = ["hostapd", "dnsmasq", "redsocks"]
-        
-        self.logger.info("Checking required packages...")
-        for package in packages:
-            try:
-                self._run_command(f"dpkg -l {package}")
-            except subprocess.CalledProcessError:
-                self.logger.info(f"Installing {package}...")
-                self._run_command(f"apt-get update && apt-get install -y {package}")
-    
-    def _setup_redsocks(self):
-        """Setup redsocks for SOCKS5 routing"""
-        # Create a unique log file name
+    def _create_redsocks_config(self):
+        """Create redsocks configuration"""
         timestamp = int(time.time())
-        log_file = f"/tmp/redsocks_{timestamp}.log"
-        try:
-            # Create or truncate the log file
-            with open(log_file, 'w') as f:
-                pass
-            # Set permissions to 666 (read/write for all)
-            os.chmod(log_file, 0o666)
-            self.logger.info(f"Created redsocks log file: {log_file}")
-        except Exception as e:
-            self.logger.error(f"Failed to create redsocks log file: {e}")
-            # Fallback to a temporary file
-            fd, log_file = tempfile.mkstemp(suffix='.log', prefix='redsocks_')
-            os.close(fd)
-            self.temp_files.append(log_file)
-            self.logger.info(f"Using temporary log file: {log_file}")
-
-        config_content = f"""
-base {{
+        config_path = f"/tmp/redsocks_{timestamp}.conf"
+        log_path = f"/tmp/redsocks_{timestamp}.log"
+        
+        config_content = f"""base {{
     log_debug = on;
     log_info = on;
-    log = "file:{log_file}";
+    log = "file:{log_path}";
     daemon = on;
     redirector = iptables;
 }}
@@ -269,108 +249,31 @@ redsocks {{
     port = {self.socks5_port};
     type = socks5;"""
 
-        # Add authentication if provided
         if self.socks5_username and self.socks5_password:
             config_content += f"""
     login = "{self.socks5_username}";
     password = "{self.socks5_password}";"""
         
-        config_content += """
-}
-"""
-        
-        # Create a unique config file name
-        config_path = f"/tmp/redsocks_{timestamp}.conf"
-        self.temp_files.append(config_path)
+        config_content += "\n}\n"
         
         with open(config_path, 'w') as f:
             f.write(config_content)
         
-        self.logger.info(f"Created redsocks config: {config_path}")
+        # Create log file
+        Path(log_path).touch()
+        os.chmod(log_path, 0o666)
         
-        # Start redsocks with debug output
-        try:
-            self.logger.info("Starting redsocks...")
-            redsocks_cmd = f"redsocks -c {config_path}"
-            self.logger.info(f"Running redsocks command: {redsocks_cmd}")
-            
-            # Run redsocks in a way that we can see its output
-            process = subprocess.Popen(
-                redsocks_cmd,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            
-            # Give it a moment to start
-            time.sleep(2)
-            
-            # Check if it's running
-            result = self._run_command("pgrep redsocks", check=False)
-            if not result.stdout:
-                # Get any output from the process
-                stdout, stderr = process.communicate()
-                if stdout:
-                    print(f"redsocks stdout: {stdout}", flush=True)
-                    self.logger.error(f"redsocks stdout: {stdout}")
-                if stderr:
-                    print(f"redsocks stderr: {stderr}", flush=True)
-                    self.logger.error(f"redsocks stderr: {stderr}")
-                raise Exception("redsocks failed to start")
-            
-            self.services_started.append("redsocks")
-            print("redsocks started successfully", flush=True)
-            self.logger.info("redsocks started successfully")
-            
-            # Check redsocks log file
-            try:
-                if os.path.exists(log_file):
-                    with open(log_file, "r") as f:
-                        log_content = f.read()
-                        print(f"redsocks log content: {log_content}", flush=True)
-                        self.logger.debug(f"redsocks log content: {log_content}")
-            except Exception as e:
-                self.logger.warning(f"Could not read redsocks log file: {e}")
-            
-            # Add iptables rules for redsocks
-            self._run_command(f"iptables -t nat -A OUTPUT -p tcp --dport 80 -s {self.subnet} -j REDIRECT --to-ports 12345")
-            self._run_command(f"iptables -t nat -A OUTPUT -p tcp --dport 443 -s {self.subnet} -j REDIRECT --to-ports 12345")
-            
-        except Exception as e:
-            print(f"Failed to start redsocks: {e}", flush=True)
-            self.logger.error(f"Failed to start redsocks: {e}")
-            self.cleanup()
-            sys.exit(1)
+        self.temp_files.extend([config_path, log_path])
+        self.logger.info(f"Created redsocks config: {config_path}")
         
         return config_path
     
-    def _check_port_53(self):
-        """Check if port 53 is in use and free it"""
-        self.logger.info("Checking port 53...")
-        try:
-            # Check if port 53 is in use
-            result = self._run_command("lsof -i :53", check=False)
-            if result.stdout:
-                self.logger.warning("Port 53 is in use. Attempting to free it...")
-                # Stop systemd-resolved
-                self._run_command("systemctl stop systemd-resolved", check=False)
-                self._run_command("systemctl disable systemd-resolved", check=False)
-                # Stop dnsmasq if running
-                self._run_command("systemctl stop dnsmasq", check=False)
-                # Kill any remaining processes on port 53
-                self._run_command("fuser -k 53/udp", check=False)
-                self._run_command("fuser -k 53/tcp", check=False)
-                time.sleep(2)  # Give it time to free up
-        except Exception as e:
-            self.logger.error(f"Error checking port 53: {e}")
-    
     def _create_hostapd_config(self):
-        """Create hostapd configuration file"""
-        config_content = f"""
-interface={self.hotspot_interface}
+        """Create hostapd configuration"""
+        timestamp = int(time.time())
+        config_path = f"/tmp/hostapd_{timestamp}.conf"
+        
+        config_content = f"""interface={self.hotspot_interface}
 driver=nl80211
 ssid={self.hotspot_ssid}
 hw_mode=g
@@ -384,352 +287,212 @@ wpa_passphrase={self.hotspot_password}
 wpa_key_mgmt=WPA-PSK
 wpa_pairwise=TKIP
 rsn_pairwise=CCMP
-logger_syslog=1
-logger_syslog_level=2
-logger_stdout=1
-logger_stdout_level=2
-ctrl_interface=/var/run/hostapd
-ctrl_interface_group=0
 """
-        
-        # Create a unique temporary file with a specific name
-        timestamp = int(time.time())
-        path = f"/tmp/hostapd_{timestamp}.conf"
-        
-        try:
-            # Create the file with proper permissions
-            with open(path, 'w') as f:
-                f.write(config_content)
-            
-            # Set permissions to 644 (read/write for owner, read for others)
-            os.chmod(path, 0o644)
-            
-            # Verify the file exists and has correct permissions
-            if not os.path.exists(path):
-                raise Exception(f"Failed to create hostapd config file at {path}")
-            
-            # Verify file contents
-            with open(path, 'r') as f:
-                content = f.read()
-                if not content.strip():
-                    raise Exception("Created hostapd config file is empty")
-            
-            print(f"Created hostapd config file: {path}", flush=True)
-            print(f"File permissions: {oct(os.stat(path).st_mode)[-3:]}", flush=True)
-            print(f"File contents:\n{config_content}", flush=True)
-            
-            self.temp_files.append(path)
-            return path
-            
-        except Exception as e:
-            print(f"Error creating hostapd config file: {e}", flush=True)
-            # Try fallback to a different location
-            try:
-                fallback_path = f"/tmp/hostapd_fallback_{timestamp}.conf"
-                with open(fallback_path, 'w') as f:
-                    f.write(config_content)
-                os.chmod(fallback_path, 0o644)
-                print(f"Created fallback hostapd config file: {fallback_path}", flush=True)
-                self.temp_files.append(fallback_path)
-                return fallback_path
-            except Exception as e2:
-                print(f"Fallback also failed: {e2}", flush=True)
-                raise Exception(f"Could not create hostapd config file: {e}")
-
-    def _create_dnsmasq_config(self):
-        """Create dnsmasq configuration file"""
-        # Create a unique log file name
-        timestamp = int(time.time())
-        log_file = f"/tmp/dnsmasq_{timestamp}.log"
-        try:
-            # Create or truncate the log file
-            with open(log_file, 'w') as f:
-                pass
-            # Set permissions to 666 (read/write for all)
-            os.chmod(log_file, 0o666)
-            self.logger.info(f"Created dnsmasq log file: {log_file}")
-        except Exception as e:
-            self.logger.error(f"Failed to create dnsmasq log file: {e}")
-            # Fallback to a temporary file
-            fd, log_file = tempfile.mkstemp(suffix='.log', prefix='dnsmasq_')
-            os.close(fd)
-            self.temp_files.append(log_file)
-            self.logger.info(f"Using temporary log file: {log_file}")
-
-        config_content = f"""
-# Basic configuration
-interface={self.hotspot_interface}
-bind-interfaces
-listen-address={self.hotspot_ip}
-no-resolv
-no-poll
-strict-order
-
-# DHCP configuration
-dhcp-range={self.dhcp_range_start},{self.dhcp_range_end},255.255.255.0,24h
-dhcp-option=3,{self.hotspot_ip}
-dhcp-option=6,8.8.8.8,8.8.4.4
-
-# DNS configuration
-server=8.8.8.8
-server=8.8.4.4
-
-# Logging
-log-queries
-log-dhcp
-log-facility={log_file}
-"""
-        
-        # Create a unique config file name
-        config_path = f"/tmp/dnsmasq_{timestamp}.conf"
-        self.temp_files.append(config_path)
         
         with open(config_path, 'w') as f:
             f.write(config_content)
         
-        self.logger.info(f"Created dnsmasq config: {config_path}")
+        os.chmod(config_path, 0o644)
+        self.temp_files.append(config_path)
+        self.logger.info(f"Created hostapd config: {config_path}")
+        
         return config_path
     
+    def _create_dnsmasq_config(self):
+        """Create dnsmasq configuration"""
+        timestamp = int(time.time())
+        config_path = f"/tmp/dnsmasq_{timestamp}.conf"
+        
+        config_content = f"""interface={self.hotspot_interface}
+bind-interfaces
+listen-address={self.hotspot_ip}
+dhcp-range={self.dhcp_range_start},{self.dhcp_range_end},255.255.255.0,24h
+dhcp-option=3,{self.hotspot_ip}
+dhcp-option=6,8.8.8.8,8.8.4.4
+server=8.8.8.8
+server=8.8.4.4
+no-resolv
+"""
+        
+        with open(config_path, 'w') as f:
+            f.write(config_content)
+        
+        self.temp_files.append(config_path)
+        self.logger.info(f"Created dnsmasq config: {config_path}")
+        
+        return config_path
+    
+    def _start_process(self, name, cmd, config_file=None):
+        """Start a process and monitor it"""
+        self.logger.info(f"Starting {name}...")
+        
+        try:
+            # Test configuration if provided
+            if config_file and name == "hostapd":
+                test_cmd = f"hostapd -t {config_file}"
+                result = self._run_command(test_cmd, timeout=10)
+                if result.returncode != 0:
+                    raise Exception(f"{name} configuration test failed")
+                self.logger.info(f"{name} configuration test passed")
+            
+            # Start the process
+            process = subprocess.Popen(
+                cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            # Give it time to start
+            time.sleep(3)
+            
+            # Check if process is running
+            if process.poll() is not None:
+                output, _ = process.communicate()
+                raise Exception(f"{name} failed to start. Output: {output}")
+            
+            self.processes[name] = process
+            self.logger.info(f"{name} started successfully (PID: {process.pid})")
+            
+            # Start output monitoring thread
+            def monitor_output():
+                while self.running and process.poll() is None:
+                    try:
+                        line = process.stdout.readline()
+                        if line:
+                            self.logger.debug(f"{name}: {line.strip()}")
+                    except:
+                        break
+            
+            thread = threading.Thread(target=monitor_output, daemon=True)
+            thread.start()
+            
+            return process
+            
+        except Exception as e:
+            self.logger.error(f"Failed to start {name}: {e}")
+            raise
+    
     def start_services(self):
-        """Start hotspot and routing services"""
+        """Start all services"""
         self._check_root()
         self._check_interfaces()
-        self._check_socks5()
         self._install_packages()
+        self._stop_conflicting_services()
         
-        print("Starting WiFi hotspot with SOCKS5 routing...", flush=True)
         self.logger.info("Starting WiFi hotspot with SOCKS5 routing...")
+        self.running = True
         
-        # Stop conflicting services and free port 53
-        self._check_port_53()
+        # Check SOCKS5 proxy
+        if not self._check_socks5():
+            self.logger.warning("SOCKS5 proxy is not accessible. Traffic may not be proxied properly.")
         
-        # Setup network interface
+        # Setup network
         self._setup_interface()
+        self._setup_iptables()
         
         # Create configuration files
+        redsocks_config = self._create_redsocks_config()
         hostapd_config = self._create_hostapd_config()
         dnsmasq_config = self._create_dnsmasq_config()
         
-        # Setup iptables
-        self._setup_iptables()
-        
-        # Setup redsocks for SOCKS5
-        self._setup_redsocks()
-        
-        # Start dnsmasq with debug output
-        print("Starting dnsmasq...", flush=True)
-        self.logger.info("Starting dnsmasq...")
+        # Start services in order
         try:
-            # First, verify the config file
-            self._run_command(f"dnsmasq --test -C {dnsmasq_config}")
-            print("dnsmasq config test passed", flush=True)
-            self.logger.info("dnsmasq config test passed")
-            
-            # Start dnsmasq in foreground with debug output
-            dnsmasq_cmd = f"dnsmasq -C {dnsmasq_config} -d --log-debug --log-queries --no-daemon"
-            print(f"Running dnsmasq command: {dnsmasq_cmd}", flush=True)
-            self.logger.info(f"Running dnsmasq command: {dnsmasq_cmd}")
-            
-            # Run dnsmasq in a way that we can see its output
-            dnsmasq_process = subprocess.Popen(
-                dnsmasq_cmd,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            
-            # Give it a moment to start
+            # Start redsocks first
+            self._start_process("redsocks", f"redsocks -c {redsocks_config}", redsocks_config)
             time.sleep(2)
             
-            # Check if it's running
-            result = self._run_command("pgrep dnsmasq", check=False)
-            if not result.stdout:
-                # Get any output from the process
-                stdout, stderr = dnsmasq_process.communicate()
-                if stdout:
-                    print(f"dnsmasq stdout: {stdout}", flush=True)
-                    self.logger.error(f"dnsmasq stdout: {stdout}")
-                if stderr:
-                    print(f"dnsmasq stderr: {stderr}", flush=True)
-                    self.logger.error(f"dnsmasq stderr: {stderr}")
-                raise Exception("dnsmasq failed to start")
-            
-            self.services_started.append("dnsmasq")
-            print("dnsmasq started successfully", flush=True)
-            self.logger.info("dnsmasq started successfully")
-            
-        except Exception as e:
-            print(f"Failed to start dnsmasq: {e}", flush=True)
-            self.logger.error(f"Failed to start dnsmasq: {e}")
-            self.cleanup()
-            sys.exit(1)
-        
-        # Start hostapd
-        print("Starting hostapd...", flush=True)
-        self.logger.info("Starting hostapd...")
-        try:
-            # First, ensure hostapd is completely stopped
-            print("Stopping any existing hostapd processes...", flush=True)
-            self._run_command("pkill -9 hostapd", check=False)
+            # Start dnsmasq
+            self._start_process("dnsmasq", f"dnsmasq -C {dnsmasq_config} -d", dnsmasq_config)
             time.sleep(2)
             
-            # Reset the interface
-            print("Resetting interface...", flush=True)
-            self._run_command(f"ip link set {self.hotspot_interface} down")
-            time.sleep(1)
-            self._run_command(f"ip link set {self.hotspot_interface} up")
-            time.sleep(2)
-            
-            # Test the config file
-            print(f"Testing hostapd config: {hostapd_config}", flush=True)
-            test_cmd = f"hostapd -dd {hostapd_config}"
-            print(f"Running test command: {test_cmd}", flush=True)
-            
-            # Run the test command and capture output
-            test_process = subprocess.Popen(
-                test_cmd,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            
-            # Wait for test to complete
-            stdout, stderr = test_process.communicate()
-            
-            # Print test output
-            if stdout:
-                print(f"hostapd test stdout:\n{stdout}", flush=True)
-            if stderr:
-                print(f"hostapd test stderr:\n{stderr}", flush=True)
-            
-            if test_process.returncode != 0:
-                raise Exception("hostapd config test failed")
-            
-            print("hostapd config test passed", flush=True)
-            self.logger.info("hostapd config test passed")
-            
-            # Start hostapd in foreground with maximum debug output
-            hostapd_cmd = f"hostapd -dd -K {hostapd_config}"
-            print(f"Running hostapd command: {hostapd_cmd}", flush=True)
-            self.logger.info(f"Running hostapd command: {hostapd_cmd}")
-            
-            # Run hostapd in a way that we can see its output
-            hostapd_process = subprocess.Popen(
-                hostapd_cmd,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            
-            # Give it a moment to start
+            # Start hostapd last
+            self._start_process("hostapd", f"hostapd {hostapd_config}", hostapd_config)
             time.sleep(5)
             
-            # Check if it's running
-            result = self._run_command("pgrep hostapd", check=False)
-            if not result.stdout:
-                # Get any output from the process
-                stdout, stderr = hostapd_process.communicate()
-                if stdout:
-                    print(f"hostapd stdout: {stdout}", flush=True)
-                    self.logger.error(f"hostapd stdout: {stdout}")
-                if stderr:
-                    print(f"hostapd stderr: {stderr}", flush=True)
-                    self.logger.error(f"hostapd stderr: {stderr}")
-                raise Exception("hostapd failed to start")
+            self.logger.info("All services started successfully")
             
-            self.services_started.append("hostapd")
-            print("hostapd started successfully", flush=True)
-            self.logger.info("hostapd started successfully")
+            print("=" * 60)
+            print("WiFi Hotspot with SOCKS5 Proxy Started Successfully!")
+            print("=" * 60)
+            print(f"SSID: {self.hotspot_ssid}")
+            print(f"Password: {self.hotspot_password}")
+            print(f"Hotspot IP: {self.hotspot_ip}")
+            print(f"SOCKS5 Proxy: {self.socks5_host}:{self.socks5_port}")
+            if self.socks5_username:
+                print(f"SOCKS5 Auth: {self.socks5_username}:***")
+            print(f"Internet Interface: {self.internet_interface}")
+            print(f"Hotspot Interface: {self.hotspot_interface}")
+            print("\nAll connected devices will route through the SOCKS5 proxy")
+            print("Press Ctrl+C to stop")
+            print("=" * 60)
+            
+            return True
             
         except Exception as e:
-            print(f"Failed to start hostapd: {e}", flush=True)
-            self.logger.error(f"Failed to start hostapd: {e}")
+            self.logger.error(f"Failed to start services: {e}")
             self.cleanup()
-            sys.exit(1)
-        
-        print("="*50, flush=True)
-        print(f"WiFi Hotspot Started!", flush=True)
-        print(f"SSID: {self.hotspot_ssid}", flush=True)
-        print(f"Password: {self.hotspot_password}", flush=True)
-        print(f"Hotspot IP: {self.hotspot_ip}", flush=True)
-        print(f"SOCKS5 Proxy: {self.socks5_host}:{self.socks5_port}", flush=True)
-        if self.socks5_username:
-            print(f"SOCKS5 Auth: {self.socks5_username}:***", flush=True)
-        print("All connected devices will route through the SOCKS5 proxy", flush=True)
-        print("Press Ctrl+C to stop", flush=True)
-        print("="*50, flush=True)
-        
-        # Keep processes running and monitor their output
-        try:
-            while True:
-                # Check if all services are still running
-                for service in self.services_started:
-                    result = self._run_command(f"pgrep {service}", check=False)
-                    if not result.stdout:
-                        print(f"{service} has stopped unexpectedly", flush=True)
-                        self.logger.error(f"{service} has stopped unexpectedly")
-                        raise Exception(f"{service} process died")
+            return False
+    
+    def monitor_services(self):
+        """Monitor running services"""
+        while self.running:
+            try:
+                # Check if all processes are still running
+                dead_processes = []
+                for name, process in self.processes.items():
+                    if process.poll() is not None:
+                        dead_processes.append(name)
                 
-                # Read and log any new output from processes
-                if dnsmasq_process.poll() is None:  # if process is still running
-                    stdout = dnsmasq_process.stdout.readline()
-                    if stdout:
-                        print(f"dnsmasq: {stdout.strip()}", flush=True)
-                        self.logger.debug(f"dnsmasq: {stdout.strip()}")
+                if dead_processes:
+                    self.logger.error(f"Services died: {', '.join(dead_processes)}")
+                    break
                 
-                if hostapd_process.poll() is None:
-                    stdout = hostapd_process.stdout.readline()
-                    if stdout:
-                        print(f"hostapd: {stdout.strip()}", flush=True)
-                        self.logger.debug(f"hostapd: {stdout.strip()}")
+                time.sleep(5)
                 
-                time.sleep(1)
-                
-        except KeyboardInterrupt:
-            print("Interrupted by user", flush=True)
-            self.logger.info("Interrupted by user")
-        except Exception as e:
-            print(f"Error: {e}", flush=True)
-            self.logger.error(f"Error: {e}")
-        finally:
-            self.cleanup()
+            except KeyboardInterrupt:
+                self.logger.info("Interrupted by user")
+                break
+            except Exception as e:
+                self.logger.error(f"Monitor error: {e}")
+                break
     
     def cleanup(self):
         """Clean up all configurations and services"""
         self.logger.info("Cleaning up...")
+        self.running = False
         
-        # Stop services
-        if "hostapd" in self.services_started:
-            self._run_command("pkill hostapd", check=False)
-            self._run_command("systemctl stop hostapd", check=False)
+        # Terminate processes
+        for name, process in self.processes.items():
+            try:
+                if process.poll() is None:
+                    self.logger.info(f"Terminating {name}...")
+                    process.terminate()
+                    time.sleep(2)
+                    if process.poll() is None:
+                        process.kill()
+            except:
+                pass
         
-        if "dnsmasq" in self.services_started:
-            self._run_command("pkill dnsmasq", check=False)
-            self._run_command("systemctl stop dnsmasq", check=False)
-            # Free port 53
-            self._run_command("fuser -k 53/udp", check=False)
-            self._run_command("fuser -k 53/tcp", check=False)
+        # Kill any remaining processes
+        self._run_command("pkill -f hostapd", check=False)
+        self._run_command("pkill -f dnsmasq", check=False)
+        self._run_command("pkill -f redsocks", check=False)
         
-        if "redsocks" in self.services_started:
-            self._run_command("pkill redsocks", check=False)
+        # Reset network configuration
+        self._run_command(f"ip addr flush dev {self.hotspot_interface}", check=False)
+        self._run_command(f"ip link set {self.hotspot_interface} down", check=False)
         
         # Reset iptables
         self._run_command("iptables -F", check=False)
         self._run_command("iptables -t nat -F", check=False)
         self._run_command("iptables -t mangle -F", check=False)
-        
-        # Reset interface
-        self._run_command(f"ip addr flush dev {self.hotspot_interface}", check=False)
-        self._run_command(f"ip link set {self.hotspot_interface} down", check=False)
+        self._run_command("iptables -P INPUT ACCEPT", check=False)
+        self._run_command("iptables -P FORWARD ACCEPT", check=False)
+        self._run_command("iptables -P OUTPUT ACCEPT", check=False)
         
         # Disable IP forwarding
         self._run_command("echo 0 > /proc/sys/net/ipv4/ip_forward", check=False)
@@ -741,21 +504,13 @@ log-facility={log_file}
             except:
                 pass
         
-        # Restart original services
-        self._run_command("systemctl start hostapd", check=False)
-        self._run_command("systemctl start dnsmasq", check=False)
-        
         self.logger.info("Cleanup completed")
     
     def run(self):
-        """Main run loop"""
+        """Main run method"""
         try:
-            self.start_services()
-            
-            # Keep running until interrupted
-            while True:
-                time.sleep(1)
-                
+            if self.start_services():
+                self.monitor_services()
         except KeyboardInterrupt:
             self.logger.info("Interrupted by user")
         except Exception as e:
