@@ -44,12 +44,16 @@ function cleanup {
 
     # Cleanup iptables rules
     iptables -t nat -D POSTROUTING -o $INET_IF -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -o $TUN_IF -j MASQUERADE 2>/dev/null || true
     iptables -D FORWARD -i $INET_IF -o $WLAN_IF -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -i $WLAN_IF -o $TUN_IF -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -i $TUN_IF -o $WLAN_IF -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -i $WLAN_IF -o $INET_IF -j DROP 2>/dev/null || true
 
-    # Remove routes
-    ip route del 192.168.50.0/24 dev $TUN_IF 2>/dev/null || true
+    # Remove routing rules
+    ip rule del from 192.168.50.0/24 table 100 2>/dev/null || true
+    ip route del default dev $TUN_IF table 100 2>/dev/null || true
+    ip route del $PROXY_IP via $(ip route | grep "^default" | head -1 | awk '{print $3}') dev $INET_IF 2>/dev/null || true
 
     # Remove tun interface
     ip link set $TUN_IF down 2>/dev/null || true
@@ -154,14 +158,24 @@ sleep 3
 echo "Enabling IP forwarding and setting up routing..."
 sysctl -w net.ipv4.ip_forward=1
 
+# Add route to proxy server through original interface (prevent routing loop)
+ip route add $PROXY_IP via $(ip route | grep "^default" | head -1 | awk '{print $3}') dev $INET_IF 2>/dev/null || true
+
 # Simplified iptables setup - route hotspot traffic through tun interface (ignore if exists)
 iptables -t nat -A POSTROUTING -o $INET_IF -j MASQUERADE 2>/dev/null || true
 iptables -A FORWARD -i $INET_IF -o $WLAN_IF -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 iptables -A FORWARD -i $WLAN_IF -o $TUN_IF -j ACCEPT 2>/dev/null || true
 iptables -A FORWARD -i $TUN_IF -o $WLAN_IF -j ACCEPT 2>/dev/null || true
 
-# Add route to send hotspot traffic through tun interface (ignore if exists)
-ip route add 192.168.50.0/24 dev $TUN_IF 2>/dev/null || true
+# Block direct internet access from hotspot (force through TUN)
+iptables -A FORWARD -i $WLAN_IF -o $INET_IF -j DROP 2>/dev/null || true
+
+# Route all traffic from hotspot clients through TUN interface
+ip route add default dev $TUN_IF table 100 2>/dev/null || true
+ip rule add from 192.168.50.0/24 table 100 2>/dev/null || true
+
+# Set up NAT for TUN interface
+iptables -t nat -A POSTROUTING -o $TUN_IF -j MASQUERADE 2>/dev/null || true
 
 echo
 echo "Hotspot '$HOTSPOT_SSID' is running!"
