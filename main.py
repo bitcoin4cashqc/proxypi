@@ -125,6 +125,10 @@ wpa_passphrase={self.hotspot_password}
 wpa_key_mgmt=WPA-PSK
 wpa_pairwise=TKIP
 rsn_pairwise=CCMP
+logger_syslog=1
+logger_syslog_level=2
+logger_stdout=1
+logger_stdout_level=2
 """
         
         fd, path = tempfile.mkstemp(suffix='.conf', prefix='hostapd_')
@@ -415,7 +419,9 @@ redsocks {{
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                bufsize=1,
+                universal_newlines=True
             )
             
             # Give it a moment to start
@@ -457,8 +463,8 @@ redsocks {{
             self._run_command(f"hostapd -dd {hostapd_config}")
             self.logger.info("hostapd config test passed")
             
-            # Start hostapd in foreground with debug output
-            hostapd_cmd = f"hostapd -dd {hostapd_config}"
+            # Start hostapd in foreground with maximum debug output
+            hostapd_cmd = f"hostapd -dd -K {hostapd_config}"
             self.logger.info(f"Running hostapd command: {hostapd_cmd}")
             
             # Run hostapd in a way that we can see its output
@@ -467,7 +473,9 @@ redsocks {{
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                bufsize=1,
+                universal_newlines=True
             )
             
             # Give it a moment to start
