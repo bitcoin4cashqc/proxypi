@@ -1,0 +1,17 @@
+# ProxyPi Configuration Example
+# Copy this file to config and modify as needed
+
+# SOCKS5 Proxy Settings (REQUIRED)
+# Format: socks5://[username:password@]host:port
+PROXY_URL="socks5://username:password@proxy.example.com:1080"
+
+# WiFi Hotspot Settings
+SSID="ProxyPi"
+PASSWORD="changeme123"
+
+# Network Interface (leave empty for auto-detection)
+# Use 'iw dev' to see available interfaces
+INTERFACE=""
+
+# Logging
+VERBOSE=false 
