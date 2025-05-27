@@ -69,20 +69,22 @@ cleanup 2>/dev/null || true
 
 echo "Starting Wi-Fi hotspot..."
 
-# 1) Create hostapd config
+# 1) Create hostapd config with more compatible settings
 cat > /tmp/hostapd.conf <<EOF
 interface=$WLAN_IF
 driver=nl80211
 ssid=$HOTSPOT_SSID
 hw_mode=g
-channel=6
-wmm_enabled=1
+channel=1
+ieee80211n=1
+wmm_enabled=0
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
 wpa=2
 wpa_passphrase=$HOTSPOT_PSK
 wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
 rsn_pairwise=CCMP
 EOF
 
