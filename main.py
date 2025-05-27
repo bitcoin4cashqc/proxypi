@@ -175,57 +175,19 @@ class WiFiSOCKS5Router:
     
     def _setup_interface(self):
         """Configure hotspot interface"""
-        print("Setting up hotspot interface...", flush=True)
+        self.logger.info("Setting up hotspot interface...")
         
-        try:
-            # First check if interface exists and is up
-            self._check_interfaces()
-            
-            # Kill any existing hostapd processes
-            self._run_command("pkill hostapd", check=False)
-            time.sleep(1)
-            
-            # Reset the interface completely
-            print("Resetting interface...", flush=True)
-            self._run_command(f"ip link set {self.hotspot_interface} down")
-            time.sleep(1)
-            
-            # Unload and reload the kernel module if possible
-            try:
-                self._run_command("modprobe -r mac80211", check=False)
-                time.sleep(1)
-                self._run_command("modprobe mac80211", check=False)
-                time.sleep(1)
-            except Exception as e:
-                print(f"Warning: Could not reload mac80211 module: {e}", flush=True)
-            
-            # Set IP address
-            self._run_command(f"ip addr flush dev {self.hotspot_interface}")
-            self._run_command(f"ip addr add {self.hotspot_ip}/24 dev {self.hotspot_interface}")
-            
-            # Bring interface up
-            self._run_command(f"ip link set {self.hotspot_interface} up")
-            time.sleep(2)  # Give it time to initialize
-            
-            # Verify interface is up and has correct IP
-            result = self._run_command(f"ip addr show {self.hotspot_interface}")
-            if self.hotspot_ip not in result.stdout:
-                raise Exception(f"Failed to set IP address on {self.hotspot_interface}")
-            
-            # Check interface mode
-            result = self._run_command(f"iw {self.hotspot_interface} info")
-            if "type AP" not in result.stdout:
-                print("Setting interface to AP mode...", flush=True)
-                self._run_command(f"iw dev {self.hotspot_interface} set type __ap")
-                time.sleep(1)
-            
-            print(f"Interface {self.hotspot_interface} configured with IP {self.hotspot_ip}", flush=True)
-            
-        except Exception as e:
-            print(f"Failed to setup interface: {e}", flush=True)
-            print("Please check if your WiFi adapter is properly connected", flush=True)
-            print("You can check available interfaces with: ip link show", flush=True)
-            sys.exit(1)
+        # Bring interface down
+        self._run_command(f"ip link set {self.hotspot_interface} down")
+        
+        # Set IP address
+        self._run_command(f"ip addr flush dev {self.hotspot_interface}")
+        self._run_command(f"ip addr add {self.hotspot_ip}/24 dev {self.hotspot_interface}")
+        
+        # Bring interface up
+        self._run_command(f"ip link set {self.hotspot_interface} up")
+        
+        self.logger.info(f"Interface {self.hotspot_interface} configured with IP {self.hotspot_ip}")
     
     def _setup_iptables(self):
         """Setup iptables rules for SOCKS5 routing"""
