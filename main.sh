@@ -48,6 +48,9 @@ function cleanup {
     iptables -D FORWARD -i $WLAN_IF -o $TUN_IF -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -i $TUN_IF -o $WLAN_IF -j ACCEPT 2>/dev/null || true
 
+    # Remove routes
+    ip route del 192.168.50.0/24 dev $TUN_IF 2>/dev/null || true
+
     # Remove tun interface
     ip link set $TUN_IF down 2>/dev/null || true
     ip tuntap del dev $TUN_IF mode tun 2>/dev/null || true
@@ -59,6 +62,10 @@ function cleanup {
 }
 
 trap cleanup EXIT
+
+# Initial cleanup in case of previous failed runs
+echo "Performing initial cleanup..."
+cleanup 2>/dev/null || true
 
 echo "Starting Wi-Fi hotspot..."
 
@@ -104,8 +111,8 @@ HOSTAPD_PID=$!
 sleep 3
 
 echo "Creating tun device $TUN_IF..."
-ip tuntap add dev $TUN_IF mode tun
-ip addr add 10.0.0.1/24 dev $TUN_IF
+ip tuntap add dev $TUN_IF mode tun 2>/dev/null || true
+ip addr add 10.0.0.1/24 dev $TUN_IF 2>/dev/null || true
 ip link set $TUN_IF up
 
 echo "Setting up local SOCKS5 tunnel..."
@@ -145,14 +152,14 @@ sleep 3
 echo "Enabling IP forwarding and setting up routing..."
 sysctl -w net.ipv4.ip_forward=1
 
-# Simplified iptables setup - route hotspot traffic through tun interface
-iptables -t nat -A POSTROUTING -o $INET_IF -j MASQUERADE
-iptables -A FORWARD -i $INET_IF -o $WLAN_IF -m state --state RELATED,ESTABLISHED -j ACCEPT
-iptables -A FORWARD -i $WLAN_IF -o $TUN_IF -j ACCEPT
-iptables -A FORWARD -i $TUN_IF -o $WLAN_IF -j ACCEPT
+# Simplified iptables setup - route hotspot traffic through tun interface (ignore if exists)
+iptables -t nat -A POSTROUTING -o $INET_IF -j MASQUERADE 2>/dev/null || true
+iptables -A FORWARD -i $INET_IF -o $WLAN_IF -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+iptables -A FORWARD -i $WLAN_IF -o $TUN_IF -j ACCEPT 2>/dev/null || true
+iptables -A FORWARD -i $TUN_IF -o $WLAN_IF -j ACCEPT 2>/dev/null || true
 
-# Add route to send hotspot traffic through tun interface
-ip route add 192.168.50.0/24 dev $TUN_IF
+# Add route to send hotspot traffic through tun interface (ignore if exists)
+ip route add 192.168.50.0/24 dev $TUN_IF 2>/dev/null || true
 
 echo
 echo "Hotspot '$HOTSPOT_SSID' is running!"
