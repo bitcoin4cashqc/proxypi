@@ -265,15 +265,55 @@ redsocks {{
         with os.fdopen(fd, 'w') as f:
             f.write(config_content)
         
-        # Start redsocks
-        self._run_command(f"redsocks -c {path}")
-        self.services_started.append("redsocks")
+        self.logger.info(f"Created redsocks config: {path}")
         
-        # Add iptables rules for redsocks
-        self._run_command(f"iptables -t nat -A OUTPUT -p tcp --dport 80 -s {self.subnet} -j REDIRECT --to-ports 12345")
-        self._run_command(f"iptables -t nat -A OUTPUT -p tcp --dport 443 -s {self.subnet} -j REDIRECT --to-ports 12345")
+        # Start redsocks with debug output
+        try:
+            self.logger.info("Starting redsocks...")
+            redsocks_cmd = f"redsocks -c {path}"
+            self.logger.info(f"Running redsocks command: {redsocks_cmd}")
+            
+            # Run redsocks in a way that we can see its output
+            process = subprocess.Popen(
+                redsocks_cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Give it a moment to start
+            time.sleep(2)
+            
+            # Check if it's running
+            result = self._run_command("pgrep redsocks", check=False)
+            if not result.stdout:
+                # Get any output from the process
+                stdout, stderr = process.communicate()
+                if stdout:
+                    self.logger.error(f"redsocks stdout: {stdout}")
+                if stderr:
+                    self.logger.error(f"redsocks stderr: {stderr}")
+                raise Exception("redsocks failed to start")
+            
+            self.services_started.append("redsocks")
+            self.logger.info("redsocks started successfully")
+            
+            # Check redsocks log file
+            if os.path.exists("/tmp/redsocks.log"):
+                with open("/tmp/redsocks.log", "r") as f:
+                    log_content = f.read()
+                    self.logger.debug(f"redsocks log content: {log_content}")
+            
+            # Add iptables rules for redsocks
+            self._run_command(f"iptables -t nat -A OUTPUT -p tcp --dport 80 -s {self.subnet} -j REDIRECT --to-ports 12345")
+            self._run_command(f"iptables -t nat -A OUTPUT -p tcp --dport 443 -s {self.subnet} -j REDIRECT --to-ports 12345")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to start redsocks: {e}")
+            self.cleanup()
+            sys.exit(1)
         
-        self.logger.info(f"Redsocks configured with config: {path}")
         return path
     
     def _check_port_53(self):
@@ -333,7 +373,7 @@ redsocks {{
             self.logger.info(f"Running dnsmasq command: {dnsmasq_cmd}")
             
             # Run dnsmasq in a way that we can see its output
-            process = subprocess.Popen(
+            dnsmasq_process = subprocess.Popen(
                 dnsmasq_cmd,
                 shell=True,
                 stdout=subprocess.PIPE,
@@ -348,7 +388,7 @@ redsocks {{
             result = self._run_command("pgrep dnsmasq", check=False)
             if not result.stdout:
                 # Get any output from the process
-                stdout, stderr = process.communicate()
+                stdout, stderr = dnsmasq_process.communicate()
                 if stdout:
                     self.logger.error(f"dnsmasq stdout: {stdout}")
                 if stderr:
@@ -372,16 +412,40 @@ redsocks {{
         # Start hostapd
         self.logger.info("Starting hostapd...")
         try:
-            self._run_command(f"hostapd {hostapd_config} &", check=False)
-            self.services_started.append("hostapd")
+            # First, verify the config file
+            self._run_command(f"hostapd -dd {hostapd_config}")
+            self.logger.info("hostapd config test passed")
+            
+            # Start hostapd in foreground with debug output
+            hostapd_cmd = f"hostapd -dd {hostapd_config}"
+            self.logger.info(f"Running hostapd command: {hostapd_cmd}")
+            
+            # Run hostapd in a way that we can see its output
+            hostapd_process = subprocess.Popen(
+                hostapd_cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Give it a moment to start
             time.sleep(5)
             
-            # Verify hostapd is running
+            # Check if it's running
             result = self._run_command("pgrep hostapd", check=False)
             if not result.stdout:
+                # Get any output from the process
+                stdout, stderr = hostapd_process.communicate()
+                if stdout:
+                    self.logger.error(f"hostapd stdout: {stdout}")
+                if stderr:
+                    self.logger.error(f"hostapd stderr: {stderr}")
                 raise Exception("hostapd failed to start")
-                
+            
+            self.services_started.append("hostapd")
             self.logger.info("hostapd started successfully")
+            
         except Exception as e:
             self.logger.error(f"Failed to start hostapd: {e}")
             self.cleanup()
@@ -398,6 +462,36 @@ redsocks {{
         self.logger.info("All connected devices will route through the SOCKS5 proxy")
         self.logger.info("Press Ctrl+C to stop")
         self.logger.info("="*50)
+        
+        # Keep processes running and monitor their output
+        try:
+            while True:
+                # Check if all services are still running
+                for service in self.services_started:
+                    result = self._run_command(f"pgrep {service}", check=False)
+                    if not result.stdout:
+                        self.logger.error(f"{service} has stopped unexpectedly")
+                        raise Exception(f"{service} process died")
+                
+                # Read and log any new output from processes
+                if dnsmasq_process.poll() is None:  # if process is still running
+                    stdout = dnsmasq_process.stdout.readline()
+                    if stdout:
+                        self.logger.debug(f"dnsmasq: {stdout.strip()}")
+                
+                if hostapd_process.poll() is None:
+                    stdout = hostapd_process.stdout.readline()
+                    if stdout:
+                        self.logger.debug(f"hostapd: {stdout.strip()}")
+                
+                time.sleep(1)
+                
+        except KeyboardInterrupt:
+            self.logger.info("Interrupted by user")
+        except Exception as e:
+            self.logger.error(f"Error: {e}")
+        finally:
+            self.cleanup()
     
     def cleanup(self):
         """Clean up all configurations and services"""
