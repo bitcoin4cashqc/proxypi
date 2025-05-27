@@ -89,6 +89,7 @@ def setup_routing():
     stdout=subprocess.DEVNULL,
     stderr=subprocess.DEVNULL
 )
+    print(tun2socks.stdout.read().decode())
     return tun2socks
 
 def cleanup():
