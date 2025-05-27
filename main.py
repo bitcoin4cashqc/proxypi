@@ -571,10 +571,17 @@ log-facility={log_file}
         print("Starting hostapd...", flush=True)
         self.logger.info("Starting hostapd...")
         try:
-            # First, check interface status
-            print("Checking interface status...", flush=True)
-            self._run_command(f"ip link show {self.hotspot_interface}")
-            self._run_command(f"iw {self.hotspot_interface} info")
+            # First, ensure hostapd is completely stopped
+            print("Stopping any existing hostapd processes...", flush=True)
+            self._run_command("pkill -9 hostapd", check=False)
+            time.sleep(2)
+            
+            # Reset the interface
+            print("Resetting interface...", flush=True)
+            self._run_command(f"ip link set {self.hotspot_interface} down")
+            time.sleep(1)
+            self._run_command(f"ip link set {self.hotspot_interface} up")
+            time.sleep(2)
             
             # Test the config file
             print(f"Testing hostapd config: {hostapd_config}", flush=True)
