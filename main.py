@@ -59,19 +59,25 @@ class WiFiSOCKS5Router:
         try:
             if isinstance(cmd, str):
                 result = subprocess.run(cmd, shell=True, check=check, 
-                                      capture_output=capture_output, text=True)
+                                      capture_output=capture_output, text=True,
+                                      bufsize=1, universal_newlines=True)
             else:
                 result = subprocess.run(cmd, check=check, 
-                                      capture_output=capture_output, text=True)
+                                      capture_output=capture_output, text=True,
+                                      bufsize=1, universal_newlines=True)
             
-            # Log command output
+            # Log command output immediately
             if result.stdout:
+                print(f"Command output: {result.stdout}", flush=True)
                 self.logger.debug(f"Command output: {result.stdout}")
             if result.stderr:
-                self.logger.debug(f"Command errors: {result.stderr}")
+                print(f"Command errors: {result.stderr}", flush=True)
+                self.logger.error(f"Command errors: {result.stderr}")
                 
             return result
         except subprocess.CalledProcessError as e:
+            print(f"Command failed: {cmd}", flush=True)
+            print(f"Error output: {e.stderr if hasattr(e, 'stderr') else str(e)}", flush=True)
             self.logger.error(f"Command failed: {cmd}")
             self.logger.error(f"Error output: {e.stderr if hasattr(e, 'stderr') else str(e)}")
             raise
@@ -131,10 +137,12 @@ logger_stdout=1
 logger_stdout_level=2
 """
         
-        fd, path = tempfile.mkstemp(suffix='.conf', prefix='hostapd_')
+        # Create a unique temporary file with a specific name
+        timestamp = int(time.time())
+        path = f"/tmp/hostapd_{timestamp}.conf"
         self.temp_files.append(path)
         
-        with os.fdopen(fd, 'w') as f:
+        with open(path, 'w') as f:
             f.write(config_content)
         
         self.logger.info(f"Created hostapd config: {path}")
@@ -142,8 +150,9 @@ logger_stdout_level=2
     
     def _create_dnsmasq_config(self):
         """Create dnsmasq configuration file"""
-        # Create log file with proper permissions
-        log_file = "/tmp/dnsmasq.log"
+        # Create a unique log file name
+        timestamp = int(time.time())
+        log_file = f"/tmp/dnsmasq_{timestamp}.log"
         try:
             # Create or truncate the log file
             with open(log_file, 'w') as f:
@@ -183,14 +192,15 @@ log-dhcp
 log-facility={log_file}
 """
         
-        fd, path = tempfile.mkstemp(suffix='.conf', prefix='dnsmasq_')
-        self.temp_files.append(path)
+        # Create a unique config file name
+        config_path = f"/tmp/dnsmasq_{timestamp}.conf"
+        self.temp_files.append(config_path)
         
-        with os.fdopen(fd, 'w') as f:
+        with open(config_path, 'w') as f:
             f.write(config_content)
         
-        self.logger.info(f"Created dnsmasq config: {path}")
-        return path
+        self.logger.info(f"Created dnsmasq config: {config_path}")
+        return config_path
     
     def _setup_interface(self):
         """Configure hotspot interface"""
@@ -254,8 +264,9 @@ log-facility={log_file}
     
     def _setup_redsocks(self):
         """Setup redsocks for SOCKS5 routing"""
-        # Create log file with proper permissions
-        log_file = "/tmp/redsocks.log"
+        # Create a unique log file name
+        timestamp = int(time.time())
+        log_file = f"/tmp/redsocks_{timestamp}.log"
         try:
             # Create or truncate the log file
             with open(log_file, 'w') as f:
@@ -297,18 +308,19 @@ redsocks {{
 }
 """
         
-        fd, path = tempfile.mkstemp(suffix='.conf', prefix='redsocks_')
-        self.temp_files.append(path)
+        # Create a unique config file name
+        config_path = f"/tmp/redsocks_{timestamp}.conf"
+        self.temp_files.append(config_path)
         
-        with os.fdopen(fd, 'w') as f:
+        with open(config_path, 'w') as f:
             f.write(config_content)
         
-        self.logger.info(f"Created redsocks config: {path}")
+        self.logger.info(f"Created redsocks config: {config_path}")
         
         # Start redsocks with debug output
         try:
             self.logger.info("Starting redsocks...")
-            redsocks_cmd = f"redsocks -c {path}"
+            redsocks_cmd = f"redsocks -c {config_path}"
             self.logger.info(f"Running redsocks command: {redsocks_cmd}")
             
             # Run redsocks in a way that we can see its output
@@ -317,7 +329,9 @@ redsocks {{
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                bufsize=1,
+                universal_newlines=True
             )
             
             # Give it a moment to start
@@ -329,12 +343,15 @@ redsocks {{
                 # Get any output from the process
                 stdout, stderr = process.communicate()
                 if stdout:
+                    print(f"redsocks stdout: {stdout}", flush=True)
                     self.logger.error(f"redsocks stdout: {stdout}")
                 if stderr:
+                    print(f"redsocks stderr: {stderr}", flush=True)
                     self.logger.error(f"redsocks stderr: {stderr}")
                 raise Exception("redsocks failed to start")
             
             self.services_started.append("redsocks")
+            print("redsocks started successfully", flush=True)
             self.logger.info("redsocks started successfully")
             
             # Check redsocks log file
@@ -342,6 +359,7 @@ redsocks {{
                 if os.path.exists(log_file):
                     with open(log_file, "r") as f:
                         log_content = f.read()
+                        print(f"redsocks log content: {log_content}", flush=True)
                         self.logger.debug(f"redsocks log content: {log_content}")
             except Exception as e:
                 self.logger.warning(f"Could not read redsocks log file: {e}")
@@ -351,11 +369,12 @@ redsocks {{
             self._run_command(f"iptables -t nat -A OUTPUT -p tcp --dport 443 -s {self.subnet} -j REDIRECT --to-ports 12345")
             
         except Exception as e:
+            print(f"Failed to start redsocks: {e}", flush=True)
             self.logger.error(f"Failed to start redsocks: {e}")
             self.cleanup()
             sys.exit(1)
         
-        return path
+        return config_path
     
     def _check_port_53(self):
         """Check if port 53 is in use and free it"""
@@ -384,6 +403,7 @@ redsocks {{
         self._check_socks5()
         self._install_packages()
         
+        print("Starting WiFi hotspot with SOCKS5 routing...", flush=True)
         self.logger.info("Starting WiFi hotspot with SOCKS5 routing...")
         
         # Stop conflicting services and free port 53
@@ -403,14 +423,17 @@ redsocks {{
         self._setup_redsocks()
         
         # Start dnsmasq with debug output
+        print("Starting dnsmasq...", flush=True)
         self.logger.info("Starting dnsmasq...")
         try:
             # First, verify the config file
             self._run_command(f"dnsmasq --test -C {dnsmasq_config}")
+            print("dnsmasq config test passed", flush=True)
             self.logger.info("dnsmasq config test passed")
             
             # Start dnsmasq in foreground with debug output
             dnsmasq_cmd = f"dnsmasq -C {dnsmasq_config} -d --log-debug --log-queries --no-daemon"
+            print(f"Running dnsmasq command: {dnsmasq_cmd}", flush=True)
             self.logger.info(f"Running dnsmasq command: {dnsmasq_cmd}")
             
             # Run dnsmasq in a way that we can see its output
@@ -433,38 +456,35 @@ redsocks {{
                 # Get any output from the process
                 stdout, stderr = dnsmasq_process.communicate()
                 if stdout:
+                    print(f"dnsmasq stdout: {stdout}", flush=True)
                     self.logger.error(f"dnsmasq stdout: {stdout}")
                 if stderr:
+                    print(f"dnsmasq stderr: {stderr}", flush=True)
                     self.logger.error(f"dnsmasq stderr: {stderr}")
                 raise Exception("dnsmasq failed to start")
             
             self.services_started.append("dnsmasq")
+            print("dnsmasq started successfully", flush=True)
             self.logger.info("dnsmasq started successfully")
             
-            # Check dnsmasq log file
-            try:
-                log_file = "/tmp/dnsmasq.log"
-                if os.path.exists(log_file):
-                    with open(log_file, "r") as f:
-                        log_content = f.read()
-                        self.logger.debug(f"dnsmasq log content: {log_content}")
-            except Exception as e:
-                self.logger.warning(f"Could not read dnsmasq log file: {e}")
-            
         except Exception as e:
+            print(f"Failed to start dnsmasq: {e}", flush=True)
             self.logger.error(f"Failed to start dnsmasq: {e}")
             self.cleanup()
             sys.exit(1)
         
         # Start hostapd
+        print("Starting hostapd...", flush=True)
         self.logger.info("Starting hostapd...")
         try:
             # First, verify the config file
             self._run_command(f"hostapd -dd {hostapd_config}")
+            print("hostapd config test passed", flush=True)
             self.logger.info("hostapd config test passed")
             
             # Start hostapd in foreground with maximum debug output
             hostapd_cmd = f"hostapd -dd -K {hostapd_config}"
+            print(f"Running hostapd command: {hostapd_cmd}", flush=True)
             self.logger.info(f"Running hostapd command: {hostapd_cmd}")
             
             # Run hostapd in a way that we can see its output
@@ -487,30 +507,34 @@ redsocks {{
                 # Get any output from the process
                 stdout, stderr = hostapd_process.communicate()
                 if stdout:
+                    print(f"hostapd stdout: {stdout}", flush=True)
                     self.logger.error(f"hostapd stdout: {stdout}")
                 if stderr:
+                    print(f"hostapd stderr: {stderr}", flush=True)
                     self.logger.error(f"hostapd stderr: {stderr}")
                 raise Exception("hostapd failed to start")
             
             self.services_started.append("hostapd")
+            print("hostapd started successfully", flush=True)
             self.logger.info("hostapd started successfully")
             
         except Exception as e:
+            print(f"Failed to start hostapd: {e}", flush=True)
             self.logger.error(f"Failed to start hostapd: {e}")
             self.cleanup()
             sys.exit(1)
         
-        self.logger.info("="*50)
-        self.logger.info(f"WiFi Hotspot Started!")
-        self.logger.info(f"SSID: {self.hotspot_ssid}")
-        self.logger.info(f"Password: {self.hotspot_password}")
-        self.logger.info(f"Hotspot IP: {self.hotspot_ip}")
-        self.logger.info(f"SOCKS5 Proxy: {self.socks5_host}:{self.socks5_port}")
+        print("="*50, flush=True)
+        print(f"WiFi Hotspot Started!", flush=True)
+        print(f"SSID: {self.hotspot_ssid}", flush=True)
+        print(f"Password: {self.hotspot_password}", flush=True)
+        print(f"Hotspot IP: {self.hotspot_ip}", flush=True)
+        print(f"SOCKS5 Proxy: {self.socks5_host}:{self.socks5_port}", flush=True)
         if self.socks5_username:
-            self.logger.info(f"SOCKS5 Auth: {self.socks5_username}:***")
-        self.logger.info("All connected devices will route through the SOCKS5 proxy")
-        self.logger.info("Press Ctrl+C to stop")
-        self.logger.info("="*50)
+            print(f"SOCKS5 Auth: {self.socks5_username}:***", flush=True)
+        print("All connected devices will route through the SOCKS5 proxy", flush=True)
+        print("Press Ctrl+C to stop", flush=True)
+        print("="*50, flush=True)
         
         # Keep processes running and monitor their output
         try:
@@ -519,6 +543,7 @@ redsocks {{
                 for service in self.services_started:
                     result = self._run_command(f"pgrep {service}", check=False)
                     if not result.stdout:
+                        print(f"{service} has stopped unexpectedly", flush=True)
                         self.logger.error(f"{service} has stopped unexpectedly")
                         raise Exception(f"{service} process died")
                 
@@ -526,18 +551,22 @@ redsocks {{
                 if dnsmasq_process.poll() is None:  # if process is still running
                     stdout = dnsmasq_process.stdout.readline()
                     if stdout:
+                        print(f"dnsmasq: {stdout.strip()}", flush=True)
                         self.logger.debug(f"dnsmasq: {stdout.strip()}")
                 
                 if hostapd_process.poll() is None:
                     stdout = hostapd_process.stdout.readline()
                     if stdout:
+                        print(f"hostapd: {stdout.strip()}", flush=True)
                         self.logger.debug(f"hostapd: {stdout.strip()}")
                 
                 time.sleep(1)
                 
         except KeyboardInterrupt:
+            print("Interrupted by user", flush=True)
             self.logger.info("Interrupted by user")
         except Exception as e:
+            print(f"Error: {e}", flush=True)
             self.logger.error(f"Error: {e}")
         finally:
             self.cleanup()
