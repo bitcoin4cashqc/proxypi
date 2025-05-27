@@ -90,14 +90,60 @@ class WiFiSOCKS5Router:
     
     def _check_interfaces(self):
         """Check if network interfaces exist"""
+        print("Checking network interfaces...", flush=True)
         interfaces = os.listdir('/sys/class/net/')
+        
+        # Check and initialize hotspot interface
         if self.hotspot_interface not in interfaces:
-            self.logger.error(f"Hotspot interface {self.hotspot_interface} not found")
-            sys.exit(1)
+            print(f"Hotspot interface {self.hotspot_interface} not found, attempting to initialize...", flush=True)
+            try:
+                # Try to bring up the interface
+                self._run_command(f"ip link set {self.hotspot_interface} up", check=False)
+                time.sleep(2)  # Give it time to initialize
+                
+                # Check if it's up now
+                interfaces = os.listdir('/sys/class/net/')
+                if self.hotspot_interface not in interfaces:
+                    print(f"Failed to initialize {self.hotspot_interface}", flush=True)
+                    print("Please check if your WiFi adapter is properly connected", flush=True)
+                    print("You can check available interfaces with: ip link show", flush=True)
+                    sys.exit(1)
+            except Exception as e:
+                print(f"Error initializing {self.hotspot_interface}: {e}", flush=True)
+                sys.exit(1)
+        
+        # Check internet interface
         if self.internet_interface not in interfaces:
-            self.logger.error(f"Internet interface {self.internet_interface} not found")
+            print(f"Internet interface {self.internet_interface} not found", flush=True)
+            print("Please check if your WiFi adapter is properly connected", flush=True)
+            print("You can check available interfaces with: ip link show", flush=True)
             sys.exit(1)
-        self.logger.info(f"Using {self.hotspot_interface} for hotspot, {self.internet_interface} for internet")
+        
+        # Verify interfaces are up
+        try:
+            # Check hotspot interface
+            result = self._run_command(f"ip link show {self.hotspot_interface}", check=False)
+            if "state DOWN" in result.stdout:
+                print(f"Bringing up {self.hotspot_interface}...", flush=True)
+                self._run_command(f"ip link set {self.hotspot_interface} up")
+                time.sleep(2)  # Give it time to initialize
+            
+            # Check internet interface
+            result = self._run_command(f"ip link show {self.internet_interface}", check=False)
+            if "state DOWN" in result.stdout:
+                print(f"Bringing up {self.internet_interface}...", flush=True)
+                self._run_command(f"ip link set {self.internet_interface} up")
+                time.sleep(2)  # Give it time to initialize
+                
+        except Exception as e:
+            print(f"Error checking interface status: {e}", flush=True)
+            sys.exit(1)
+        
+        print(f"Using {self.hotspot_interface} for hotspot, {self.internet_interface} for internet", flush=True)
+        
+        # Print interface details for debugging
+        self._run_command(f"ip link show {self.hotspot_interface}")
+        self._run_command(f"ip link show {self.internet_interface}")
     
     def _check_socks5(self):
         """Check if SOCKS5 proxy is accessible"""
