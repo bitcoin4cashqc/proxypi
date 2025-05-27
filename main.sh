@@ -134,9 +134,9 @@ sleep 2
 
 echo "Starting tun2socks-linux-arm64..."
 if [[ -n "$SSH_TUNNEL_PID" ]]; then
-    tun2socks-linux-arm64 -interface $TUN_IF -proxy socks5://127.0.0.1:$LOCAL_SOCKS_PORT &
+    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://127.0.0.1:$LOCAL_SOCKS_PORT -interface $INET_IF &
 else
-    tun2socks-linux-arm64 -interface $TUN_IF -proxy socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT &
+    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT -interface $INET_IF &
 fi
 TUN2SOCKS_PID=$!
 
