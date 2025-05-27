@@ -89,7 +89,7 @@ class WiFiSOCKS5Router:
             sys.exit(1)
     
     def _check_interfaces(self):
-        """Check if network interfaces exist"""
+        """Check if network interfaces exist and initialize them if needed"""
         print("Checking network interfaces...", flush=True)
         interfaces = os.listdir('/sys/class/net/')
         
@@ -144,6 +144,19 @@ class WiFiSOCKS5Router:
         # Print interface details for debugging
         self._run_command(f"ip link show {self.hotspot_interface}")
         self._run_command(f"ip link show {self.internet_interface}")
+        
+        # Check if interface supports AP mode
+        print("Checking if interface supports AP mode...", flush=True)
+        try:
+            result = self._run_command(f"iw {self.hotspot_interface} info", check=False)
+            print(f"Interface info:\n{result.stdout}", flush=True)
+            
+            if "type AP" not in result.stdout:
+                print("Warning: Interface may not support AP mode", flush=True)
+                print("Checking available modes...", flush=True)
+                self._run_command(f"iw list | grep -A 10 'Supported interface modes'")
+        except Exception as e:
+            print(f"Warning: Could not check interface capabilities: {e}", flush=True)
     
     def _check_socks5(self):
         """Check if SOCKS5 proxy is accessible"""
@@ -556,9 +569,39 @@ redsocks {{
         print("Starting hostapd...", flush=True)
         self.logger.info("Starting hostapd...")
         try:
-            # First, verify the config file
+            # First, check interface status
+            print("Checking interface status...", flush=True)
+            self._run_command(f"ip link show {self.hotspot_interface}")
+            self._run_command(f"iw {self.hotspot_interface} info")
+            
+            # Test the config file
             print(f"Testing hostapd config: {hostapd_config}", flush=True)
-            self._run_command(f"hostapd -dd {hostapd_config}")
+            test_cmd = f"hostapd -dd {hostapd_config}"
+            print(f"Running test command: {test_cmd}", flush=True)
+            
+            # Run the test command and capture output
+            test_process = subprocess.Popen(
+                test_cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            # Wait for test to complete
+            stdout, stderr = test_process.communicate()
+            
+            # Print test output
+            if stdout:
+                print(f"hostapd test stdout:\n{stdout}", flush=True)
+            if stderr:
+                print(f"hostapd test stderr:\n{stderr}", flush=True)
+            
+            if test_process.returncode != 0:
+                raise Exception("hostapd config test failed")
+            
             print("hostapd config test passed", flush=True)
             self.logger.info("hostapd config test passed")
             
