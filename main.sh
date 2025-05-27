@@ -23,8 +23,8 @@ TUN2SOCKS_PID=""
 SSH_TUNNEL_PID=""
 
 # Check for required tools
-if ! command -v tun2socks &> /dev/null; then
-  echo "tun2socks not found! Please install badvpn tun2socks."
+if ! command -v tun2socks-linux-arm64 &> /dev/null; then
+  echo "tun2socks-linux-arm64 not found! Please install tun2socks-linux-arm64."
   exit 1
 fi
 
@@ -132,11 +132,11 @@ fi
 
 sleep 2
 
-echo "Starting tun2socks..."
+echo "Starting tun2socks-linux-arm64..."
 if [[ -n "$SSH_TUNNEL_PID" ]]; then
-    tun2socks --tundev $TUN_IF --netif-ipaddr 10.0.0.2 --netif-netmask 255.255.255.0 --socks-server-addr 127.0.0.1:$LOCAL_SOCKS_PORT &
+    tun2socks-linux-arm64 --tundev $TUN_IF --netif-ipaddr 10.0.0.2 --netif-netmask 255.255.255.0 --socks-server-addr 127.0.0.1:$LOCAL_SOCKS_PORT &
 else
-    tun2socks --tundev $TUN_IF --netif-ipaddr 10.0.0.2 --netif-netmask 255.255.255.0 --socks-server-addr $PROXY_IP:$PROXY_PORT &
+    tun2socks-linux-arm64 --tundev $TUN_IF --netif-ipaddr 10.0.0.2 --netif-netmask 255.255.255.0 --socks-server-addr $PROXY_IP:$PROXY_PORT &
 fi
 TUN2SOCKS_PID=$!
 
