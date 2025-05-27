@@ -10,10 +10,10 @@ INTERNET_IFACE = "wlan0"
 SSID = "ProxyHotspot"
 PASSWORD = "changeme123"
 
-PROXY_HOST = "127.0.0.1"
-PROXY_PORT = 1080
-PROXY_USERNAME = "myuser"
-PROXY_PASSWORD = "mypassword"
+PROXY_HOST = "217.182.193.32"
+PROXY_PORT = 10040
+PROXY_USERNAME = "1RzgE"
+PROXY_PASSWORD = "RyMxP"
 
 TUN2SOCKS_PATH = "/usr/local/bin/tun2socks"  # or wherever you installed xjasonlyu/tun2socks
 # ===============
