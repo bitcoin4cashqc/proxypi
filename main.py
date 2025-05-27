@@ -138,6 +138,23 @@ rsn_pairwise=CCMP
     
     def _create_dnsmasq_config(self):
         """Create dnsmasq configuration file"""
+        # Create log file with proper permissions
+        log_file = "/tmp/dnsmasq.log"
+        try:
+            # Create or truncate the log file
+            with open(log_file, 'w') as f:
+                pass
+            # Set permissions to 666 (read/write for all)
+            os.chmod(log_file, 0o666)
+            self.logger.info(f"Created dnsmasq log file: {log_file}")
+        except Exception as e:
+            self.logger.error(f"Failed to create dnsmasq log file: {e}")
+            # Fallback to a temporary file
+            fd, log_file = tempfile.mkstemp(suffix='.log', prefix='dnsmasq_')
+            os.close(fd)
+            self.temp_files.append(log_file)
+            self.logger.info(f"Using temporary log file: {log_file}")
+
         config_content = f"""
 # Basic configuration
 interface={self.hotspot_interface}
@@ -159,7 +176,7 @@ server=8.8.4.4
 # Logging
 log-queries
 log-dhcp
-log-facility=/tmp/dnsmasq.log
+log-facility={log_file}
 """
         
         fd, path = tempfile.mkstemp(suffix='.conf', prefix='dnsmasq_')
@@ -233,11 +250,28 @@ log-facility=/tmp/dnsmasq.log
     
     def _setup_redsocks(self):
         """Setup redsocks for SOCKS5 routing"""
+        # Create log file with proper permissions
+        log_file = "/tmp/redsocks.log"
+        try:
+            # Create or truncate the log file
+            with open(log_file, 'w') as f:
+                pass
+            # Set permissions to 666 (read/write for all)
+            os.chmod(log_file, 0o666)
+            self.logger.info(f"Created redsocks log file: {log_file}")
+        except Exception as e:
+            self.logger.error(f"Failed to create redsocks log file: {e}")
+            # Fallback to a temporary file
+            fd, log_file = tempfile.mkstemp(suffix='.log', prefix='redsocks_')
+            os.close(fd)
+            self.temp_files.append(log_file)
+            self.logger.info(f"Using temporary log file: {log_file}")
+
         config_content = f"""
 base {{
     log_debug = on;
     log_info = on;
-    log = "file:/tmp/redsocks.log";
+    log = "file:{log_file}";
     daemon = on;
     redirector = iptables;
 }}
@@ -300,10 +334,13 @@ redsocks {{
             self.logger.info("redsocks started successfully")
             
             # Check redsocks log file
-            if os.path.exists("/tmp/redsocks.log"):
-                with open("/tmp/redsocks.log", "r") as f:
-                    log_content = f.read()
-                    self.logger.debug(f"redsocks log content: {log_content}")
+            try:
+                if os.path.exists(log_file):
+                    with open(log_file, "r") as f:
+                        log_content = f.read()
+                        self.logger.debug(f"redsocks log content: {log_content}")
+            except Exception as e:
+                self.logger.warning(f"Could not read redsocks log file: {e}")
             
             # Add iptables rules for redsocks
             self._run_command(f"iptables -t nat -A OUTPUT -p tcp --dport 80 -s {self.subnet} -j REDIRECT --to-ports 12345")
@@ -399,10 +436,14 @@ redsocks {{
             self.logger.info("dnsmasq started successfully")
             
             # Check dnsmasq log file
-            if os.path.exists("/tmp/dnsmasq.log"):
-                with open("/tmp/dnsmasq.log", "r") as f:
-                    log_content = f.read()
-                    self.logger.debug(f"dnsmasq log content: {log_content}")
+            try:
+                log_file = "/tmp/dnsmasq.log"
+                if os.path.exists(log_file):
+                    with open(log_file, "r") as f:
+                        log_content = f.read()
+                        self.logger.debug(f"dnsmasq log content: {log_content}")
+            except Exception as e:
+                self.logger.warning(f"Could not read dnsmasq log file: {e}")
             
         except Exception as e:
             self.logger.error(f"Failed to start dnsmasq: {e}")
