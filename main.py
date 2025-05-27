@@ -47,14 +47,14 @@ wpa=2
 wpa_passphrase={PASSWORD}
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
-    """
+    """.strip()
     dnsmasq_conf = f"""
 interface={AP_IFACE}
 dhcp-range=10.0.0.10,10.0.0.100,12h
 dhcp-option=3,10.0.0.1
 dhcp-option=6,1.1.1.1,8.8.8.8
 bind-interfaces
-    """
+    """.strip()
     os.system(f"ip link set {AP_IFACE} down")
     os.system(f"ip addr flush dev {AP_IFACE}")
     os.system(f"ip addr add 10.0.0.1/24 dev {AP_IFACE}")
