@@ -109,6 +109,7 @@ def setup_routing():
         print(output.decode())
         tun2socks.terminate()
         return None
+    return tun2socks
 
 
 def cleanup():
