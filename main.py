@@ -3,6 +3,7 @@ import signal
 import subprocess
 import tempfile
 import sys
+import time
 
 # ==== CONFIG ====
 AP_IFACE = "wlan1"
@@ -67,7 +68,6 @@ bind-interfaces
     hostapd = run(f"hostapd {hostapd_file}")
 
     return hostapd, dnsmasq
-
 def setup_routing():
     # Enable IP forwarding
     os.system("sysctl -w net.ipv4.ip_forward=1")
@@ -83,14 +83,33 @@ def setup_routing():
     os.system(f"iptables -A FORWARD -i tun0 -o {AP_IFACE} -j ACCEPT")
 
     # Start tun2socks to tunnel traffic from tun0 through SOCKS5
-    tun2socks = run(
-    f"{TUN2SOCKS_PATH} --netif tun0 --socks5 {PROXY_HOST}:{PROXY_PORT} "
-    f"--username {PROXY_USERNAME} --password {PROXY_PASSWORD}",
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL
-)
-    print(tun2socks.stdout.read().decode())
-    return tun2socks
+    cmd = [
+        TUN2SOCKS_PATH,
+        "--netif", "tun0",
+        "--socks5", f"{PROXY_HOST}:{PROXY_PORT}",
+        "--username", PROXY_USERNAME,
+        "--password", PROXY_PASSWORD
+    ]
+
+    print(f"[+] Starting tun2socks: {' '.join(cmd)}")
+    tun2socks = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    # Wait and check if tun0 is up
+    for _ in range(10):
+        result = subprocess.run(["ip", "link", "show", "tun0"], capture_output=True, text=True)
+        if "state UP" in result.stdout:
+            print("[+] tun0 is UP and ready")
+            break
+        else:
+            print("[-] Waiting for tun0 to be UP...")
+            time.sleep(1)
+    else:
+        print("[!] tun0 failed to come UP. Check tun2socks logs.")
+        output, _ = tun2socks.communicate(timeout=3)
+        print(output.decode())
+        tun2socks.terminate()
+        return None
+
 
 def cleanup():
     print("\nCleaning up...")
