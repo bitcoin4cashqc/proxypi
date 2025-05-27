@@ -9,10 +9,15 @@ AP_IFACE = "wlan1"
 INTERNET_IFACE = "wlan0"
 SSID = "ProxyHotspot"
 PASSWORD = "changeme123"
+
 PROXY_HOST = "127.0.0.1"
 PROXY_PORT = 1080
-TUN2SOCKS_PATH = "/usr/local/bin/tun2socks"  # Change if needed
+PROXY_USERNAME = "myuser"
+PROXY_PASSWORD = "mypassword"
+
+TUN2SOCKS_PATH = "/usr/local/bin/tun2socks"  # or wherever you installed xjasonlyu/tun2socks
 # ===============
+
 
 # Temp files
 temp_files = []
@@ -79,10 +84,11 @@ def setup_routing():
 
     # Start tun2socks to tunnel traffic from tun0 through SOCKS5
     tun2socks = run(
-        f"{TUN2SOCKS_PATH} --netif tun0 --socks5 {PROXY_HOST}:{PROXY_PORT}",
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
+    f"{TUN2SOCKS_PATH} --netif tun0 --socks5 {PROXY_HOST}:{PROXY_PORT} "
+    f"--username {PROXY_USERNAME} --password {PROXY_PASSWORD}",
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL
+)
     return tun2socks
 
 def cleanup():
