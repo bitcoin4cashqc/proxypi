@@ -173,142 +173,59 @@ class WiFiSOCKS5Router:
         except Exception as e:
             self.logger.warning(f"Could not check SOCKS5 proxy: {e}")
     
-    def _create_hostapd_config(self):
-        """Create hostapd configuration file"""
-        config_content = f"""
-interface={self.hotspot_interface}
-driver=nl80211
-ssid={self.hotspot_ssid}
-hw_mode=g
-channel=7
-wmm_enabled=0
-macaddr_acl=0
-auth_algs=1
-ignore_broadcast_ssid=0
-wpa=2
-wpa_passphrase={self.hotspot_password}
-wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
-rsn_pairwise=CCMP
-logger_syslog=1
-logger_syslog_level=2
-logger_stdout=1
-logger_stdout_level=2
-"""
-        
-        # Create a unique temporary file with a specific name
-        timestamp = int(time.time())
-        path = f"/tmp/hostapd_{timestamp}.conf"
-        
-        try:
-            # Create the file with proper permissions
-            with open(path, 'w') as f:
-                f.write(config_content)
-            
-            # Set permissions to 644 (read/write for owner, read for others)
-            os.chmod(path, 0o644)
-            
-            # Verify the file exists and has correct permissions
-            if not os.path.exists(path):
-                raise Exception(f"Failed to create hostapd config file at {path}")
-            
-            # Verify file contents
-            with open(path, 'r') as f:
-                content = f.read()
-                if not content.strip():
-                    raise Exception("Created hostapd config file is empty")
-            
-            print(f"Created hostapd config file: {path}", flush=True)
-            print(f"File permissions: {oct(os.stat(path).st_mode)[-3:]}", flush=True)
-            print(f"File contents:\n{config_content}", flush=True)
-            
-            self.temp_files.append(path)
-            return path
-            
-        except Exception as e:
-            print(f"Error creating hostapd config file: {e}", flush=True)
-            # Try fallback to a different location
-            try:
-                fallback_path = f"/tmp/hostapd_fallback_{timestamp}.conf"
-                with open(fallback_path, 'w') as f:
-                    f.write(config_content)
-                os.chmod(fallback_path, 0o644)
-                print(f"Created fallback hostapd config file: {fallback_path}", flush=True)
-                self.temp_files.append(fallback_path)
-                return fallback_path
-            except Exception as e2:
-                print(f"Fallback also failed: {e2}", flush=True)
-                raise Exception(f"Could not create hostapd config file: {e}")
-    
-    def _create_dnsmasq_config(self):
-        """Create dnsmasq configuration file"""
-        # Create a unique log file name
-        timestamp = int(time.time())
-        log_file = f"/tmp/dnsmasq_{timestamp}.log"
-        try:
-            # Create or truncate the log file
-            with open(log_file, 'w') as f:
-                pass
-            # Set permissions to 666 (read/write for all)
-            os.chmod(log_file, 0o666)
-            self.logger.info(f"Created dnsmasq log file: {log_file}")
-        except Exception as e:
-            self.logger.error(f"Failed to create dnsmasq log file: {e}")
-            # Fallback to a temporary file
-            fd, log_file = tempfile.mkstemp(suffix='.log', prefix='dnsmasq_')
-            os.close(fd)
-            self.temp_files.append(log_file)
-            self.logger.info(f"Using temporary log file: {log_file}")
-
-        config_content = f"""
-# Basic configuration
-interface={self.hotspot_interface}
-bind-interfaces
-listen-address={self.hotspot_ip}
-no-resolv
-no-poll
-strict-order
-
-# DHCP configuration
-dhcp-range={self.dhcp_range_start},{self.dhcp_range_end},255.255.255.0,24h
-dhcp-option=3,{self.hotspot_ip}
-dhcp-option=6,8.8.8.8,8.8.4.4
-
-# DNS configuration
-server=8.8.8.8
-server=8.8.4.4
-
-# Logging
-log-queries
-log-dhcp
-log-facility={log_file}
-"""
-        
-        # Create a unique config file name
-        config_path = f"/tmp/dnsmasq_{timestamp}.conf"
-        self.temp_files.append(config_path)
-        
-        with open(config_path, 'w') as f:
-            f.write(config_content)
-        
-        self.logger.info(f"Created dnsmasq config: {config_path}")
-        return config_path
-    
     def _setup_interface(self):
         """Configure hotspot interface"""
-        self.logger.info("Setting up hotspot interface...")
+        print("Setting up hotspot interface...", flush=True)
         
-        # Bring interface down
-        self._run_command(f"ip link set {self.hotspot_interface} down")
-        
-        # Set IP address
-        self._run_command(f"ip addr flush dev {self.hotspot_interface}")
-        self._run_command(f"ip addr add {self.hotspot_ip}/24 dev {self.hotspot_interface}")
-        
-        # Bring interface up
-        self._run_command(f"ip link set {self.hotspot_interface} up")
-        
-        self.logger.info(f"Interface {self.hotspot_interface} configured with IP {self.hotspot_ip}")
+        try:
+            # First check if interface exists and is up
+            self._check_interfaces()
+            
+            # Kill any existing hostapd processes
+            self._run_command("pkill hostapd", check=False)
+            time.sleep(1)
+            
+            # Reset the interface completely
+            print("Resetting interface...", flush=True)
+            self._run_command(f"ip link set {self.hotspot_interface} down")
+            time.sleep(1)
+            
+            # Unload and reload the kernel module if possible
+            try:
+                self._run_command("modprobe -r mac80211", check=False)
+                time.sleep(1)
+                self._run_command("modprobe mac80211", check=False)
+                time.sleep(1)
+            except Exception as e:
+                print(f"Warning: Could not reload mac80211 module: {e}", flush=True)
+            
+            # Set IP address
+            self._run_command(f"ip addr flush dev {self.hotspot_interface}")
+            self._run_command(f"ip addr add {self.hotspot_ip}/24 dev {self.hotspot_interface}")
+            
+            # Bring interface up
+            self._run_command(f"ip link set {self.hotspot_interface} up")
+            time.sleep(2)  # Give it time to initialize
+            
+            # Verify interface is up and has correct IP
+            result = self._run_command(f"ip addr show {self.hotspot_interface}")
+            if self.hotspot_ip not in result.stdout:
+                raise Exception(f"Failed to set IP address on {self.hotspot_interface}")
+            
+            # Check interface mode
+            result = self._run_command(f"iw {self.hotspot_interface} info")
+            if "type AP" not in result.stdout:
+                print("Setting interface to AP mode...", flush=True)
+                self._run_command(f"iw dev {self.hotspot_interface} set type __ap")
+                time.sleep(1)
+            
+            print(f"Interface {self.hotspot_interface} configured with IP {self.hotspot_ip}", flush=True)
+            
+        except Exception as e:
+            print(f"Failed to setup interface: {e}", flush=True)
+            print("Please check if your WiFi adapter is properly connected", flush=True)
+            print("You can check available interfaces with: ip link show", flush=True)
+            sys.exit(1)
     
     def _setup_iptables(self):
         """Setup iptables rules for SOCKS5 routing"""
