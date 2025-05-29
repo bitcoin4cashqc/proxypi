@@ -186,14 +186,35 @@ fi
 # Setup wlan interface
 ip link set $WLAN_IF down
 ip addr flush dev $WLAN_IF
-ip addr add 192.168.50.1/24 dev $WLAN_IF
-ip link set $WLAN_IF up
 
 # Prevent NetworkManager from interfering with our hotspot interface
 if command -v nmcli &> /dev/null; then
-    echo "Setting $WLAN_IF to unmanaged in NetworkManager to prevent conflicts..."
+    echo "Configuring NetworkManager to release control of $WLAN_IF..."
+    
+    # First disconnect any existing connections
+    nmcli device disconnect $WLAN_IF 2>/dev/null || true
+    
+    # Set to unmanaged
     nmcli device set $WLAN_IF managed no 2>/dev/null || true
+    
+    # Give NetworkManager time to release the interface
+    echo "Waiting for NetworkManager to release interface..."
+    sleep 2
+    
+    # Verify the interface is unmanaged
+    if nmcli device show $WLAN_IF | grep -q "GENERAL.STATE.*unmanaged"; then
+        echo "$WLAN_IF is now unmanaged by NetworkManager"
+    else
+        echo "Warning: $WLAN_IF may still be managed by NetworkManager"
+    fi
 fi
+
+# Ensure interface is completely reset
+ip link set $WLAN_IF down
+sleep 1
+ip addr flush dev $WLAN_IF
+ip addr add 192.168.50.1/24 dev $WLAN_IF
+ip link set $WLAN_IF up
 
 # Start dnsmasq
 echo "Starting dnsmasq..."
