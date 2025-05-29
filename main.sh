@@ -9,10 +9,10 @@ HOTSPOT_SSID="MyProxyAP"
 HOTSPOT_PSK="password123"
 
 # SOCKS5 proxy details — change here or export as env vars before running
-PROXY_IP="217.182.194.105"
-PROXY_PORT="10113"
-PROXY_USER="VUdmv"
-PROXY_PASS="3yxDF"
+PROXY_IP="185.209.177.12"
+PROXY_PORT="10527"
+PROXY_USER="X8Uu"
+PROXY_PASS="JeOQwWYW"
 TUN_IF=tun0
 LOCAL_SOCKS_PORT=1080
 
