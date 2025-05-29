@@ -25,6 +25,7 @@ DISABLE_UDP=true
 # DNS leak protection using dns2socks
 USE_DNS2SOCKS=true
 DNS2SOCKS_PORT=5353
+DNS2SOCKS_PATH="$HOME/dns2socks"
 
 # Process tracking
 HOSTAPD_PID=""
@@ -44,9 +45,10 @@ if ! command -v ssh &> /dev/null; then
   exit 1
 fi
 
-if [[ "$USE_DNS2SOCKS" == "true" ]] && ! command -v dns2socks &> /dev/null; then
-  echo "dns2socks not found! Please install dns2socks."
-  echo "Install with: sudo apt install dns2socks"
+if [[ "$USE_DNS2SOCKS" == "true" ]] && [[ ! -x "$DNS2SOCKS_PATH" ]]; then
+  echo "dns2socks not found at $DNS2SOCKS_PATH!"
+  echo "Please ensure dns2socks is compiled and available at: $DNS2SOCKS_PATH"
+  echo "Or install system version with: sudo apt install dns2socks"
   exit 1
 fi
 
@@ -253,11 +255,11 @@ if [[ "$USE_DNS2SOCKS" == "true" ]]; then
     
     # Start dns2socks to forward DNS through SOCKS proxy
     if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
-        dns2socks socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT 8.8.8.8 127.0.0.1:$DNS2SOCKS_PORT &
+        $DNS2SOCKS_PATH socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT 8.8.8.8 127.0.0.1:$DNS2SOCKS_PORT &
         DNS2SOCKS_PID=$!
         echo "dns2socks started with authentication for $PROXY_IP:$PROXY_PORT"
     else
-        dns2socks socks5://$PROXY_IP:$PROXY_PORT 8.8.8.8 127.0.0.1:$DNS2SOCKS_PORT &
+        $DNS2SOCKS_PATH socks5://$PROXY_IP:$PROXY_PORT 8.8.8.8 127.0.0.1:$DNS2SOCKS_PORT &
         DNS2SOCKS_PID=$!
         echo "dns2socks started for $PROXY_IP:$PROXY_PORT"
     fi
@@ -327,7 +329,7 @@ if [[ -n "$PROXY_USER" ]]; then
   echo "Using SOCKS5 auth user: $PROXY_USER"
 fi
 if [[ "$USE_DNS2SOCKS" == "true" ]]; then
-  echo "DNS leak protection: ENABLED (dns2socks) - All DNS queries go through proxy"
+  echo "DNS leak protection: ENABLED (custom dns2socks at $DNS2SOCKS_PATH) - All DNS queries go through proxy"
 else
   echo "DNS leak protection: DISABLED - DNS queries may leak"
 fi
