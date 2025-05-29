@@ -189,6 +189,12 @@ ip addr flush dev $WLAN_IF
 ip addr add 192.168.50.1/24 dev $WLAN_IF
 ip link set $WLAN_IF up
 
+# Prevent NetworkManager from interfering with our hotspot interface
+if command -v nmcli &> /dev/null; then
+    echo "Setting $WLAN_IF to unmanaged in NetworkManager to prevent conflicts..."
+    nmcli device set $WLAN_IF managed no 2>/dev/null || true
+fi
+
 # Start dnsmasq
 echo "Starting dnsmasq..."
 dnsmasq --conf-file=/tmp/dnsmasq.conf --pid-file=/tmp/dnsmasq.pid
@@ -275,7 +281,6 @@ if [[ "$USE_DNS2SOCKS" == "true" ]]; then
     if command -v nmcli &> /dev/null; then
         echo "Configuring NetworkManager to not override DNS..."
         # Set our interfaces to unmanaged for DNS
-        nmcli device set $WLAN_IF managed no 2>/dev/null || true
         nmcli device set $INET_IF ipv4.ignore-auto-dns yes 2>/dev/null || true
     fi
     
