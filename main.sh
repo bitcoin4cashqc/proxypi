@@ -19,6 +19,9 @@ LOCAL_SOCKS_PORT=1080
 # DNS servers to use (will be served through the proxy)
 DNS_SERVERS="8.8.8.8,1.1.1.1"
 
+# UDP Configuration - set to true to disable UDP completely
+DISABLE_UDP=true
+
 # Process tracking
 HOSTAPD_PID=""
 DNSMASQ_PID=""
@@ -149,10 +152,20 @@ fi
 sleep 2
 
 echo "Starting tun2socks-linux-arm64..."
-if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
-    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT -interface $INET_IF &
+
+# Build UDP timeout parameter based on configuration
+UDP_TIMEOUT_PARAM=""
+if [[ "$DISABLE_UDP" == "true" ]]; then
+    UDP_TIMEOUT_PARAM="--udp-timeout 0"
+    echo "UDP is disabled (timeout set to 0)"
 else
-    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_IP:$PROXY_PORT -interface $INET_IF &
+    echo "UDP is enabled"
+fi
+
+if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
+    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT -interface $INET_IF $UDP_TIMEOUT_PARAM &
+else
+    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_IP:$PROXY_PORT -interface $INET_IF $UDP_TIMEOUT_PARAM &
 fi
 TUN2SOCKS_PID=$!
 
