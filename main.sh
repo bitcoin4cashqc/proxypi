@@ -255,11 +255,11 @@ if [[ "$USE_DNS2SOCKS" == "true" ]]; then
     
     # Start dns2socks to forward DNS through SOCKS proxy
     if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
-        $DNS2SOCKS_PATH $PROXY_IP $PROXY_PORT 8.8.8.8 127.0.0.1 $DNS2SOCKS_PORT $PROXY_USER $PROXY_PASS &
+        $DNS2SOCKS_PATH /u:$PROXY_USER /p:$PROXY_PASS $PROXY_IP:$PROXY_PORT 8.8.8.8:53 127.0.0.1:$DNS2SOCKS_PORT &
         DNS2SOCKS_PID=$!
         echo "dns2socks started with authentication for $PROXY_IP:$PROXY_PORT"
     else
-        $DNS2SOCKS_PATH $PROXY_IP $PROXY_PORT 8.8.8.8 127.0.0.1 $DNS2SOCKS_PORT &
+        $DNS2SOCKS_PATH $PROXY_IP:$PROXY_PORT 8.8.8.8:53 127.0.0.1:$DNS2SOCKS_PORT &
         DNS2SOCKS_PID=$!
         echo "dns2socks started for $PROXY_IP:$PROXY_PORT"
     fi
