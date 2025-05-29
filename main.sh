@@ -9,10 +9,10 @@ HOTSPOT_SSID="MyProxyAP"
 HOTSPOT_PSK="password123"
 
 # SOCKS5 proxy details — change here or export as env vars before running
-PROXY_IP="83.97.79.222"
+PROXY_IP=" 83.97.79.222"
 PROXY_PORT="1080"
-PROXY_USER="1fna6skul97"
-PROXY_PASS="1y223b1el4v"
+PROXY_USER="1grj9lcxh4x"
+PROXY_PASS="115c06dfl8r"
 TUN_IF=tun0
 LOCAL_SOCKS_PORT=1080
 
@@ -20,7 +20,7 @@ LOCAL_SOCKS_PORT=1080
 DNS_SERVERS="8.8.8.8,1.1.1.1"
 
 # UDP Configuration - set to true to disable UDP completely
-DISABLE_UDP=true
+DISABLE_UDP=false
 
 # Process tracking
 HOSTAPD_PID=""
