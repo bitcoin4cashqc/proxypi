@@ -86,17 +86,25 @@ interface=$WLAN_IF
 driver=nl80211
 ssid=$HOTSPOT_SSID
 hw_mode=g
-channel=1
+channel=0  # Auto-select best channel
+acs_num_scans=5
+country_code=US
 ieee80211n=1
-wmm_enabled=0
+ieee80211d=1
+ieee80211h=1
+wmm_enabled=1
+ht_capab=[HT40][SHORT-GI-20][SHORT-GI-40]
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
 wpa=2
 wpa_passphrase=$HOTSPOT_PSK
 wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
+wpa_pairwise=CCMP
 rsn_pairwise=CCMP
+beacon_int=100
+dtim_period=2
+max_num_sta=10
 EOF
 
 # 2) Create dnsmasq config
