@@ -24,7 +24,7 @@ DISABLE_UDP=true
 
 # DNS leak protection using dns2socks
 USE_DNS2SOCKS=true
-DNS2SOCKS_PORT=5353
+DNS2SOCKS_PORT=5454
 DNS2SOCKS_PATH="$HOME/dns2socks"
 
 # Process tracking
@@ -61,6 +61,14 @@ function cleanup {
     [[ -n "$DNS2SOCKS_PID" ]] && kill $DNS2SOCKS_PID 2>/dev/null && wait $DNS2SOCKS_PID 2>/dev/null || true
     [[ -n "$HOSTAPD_PID" ]] && kill $HOSTAPD_PID 2>/dev/null && wait $HOSTAPD_PID 2>/dev/null || true
     [[ -n "$DNSMASQ_PID" ]] && kill $DNSMASQ_PID 2>/dev/null && wait $DNSMASQ_PID 2>/dev/null || true
+
+    # Clean up any leftover processes that might be using our ports
+    echo "Cleaning up leftover processes..."
+    pkill -f "socat.*$DNS2SOCKS_PORT" 2>/dev/null || true
+    pkill -f "dns2socks.*$DNS2SOCKS_PORT" 2>/dev/null || true
+    
+    # Kill any dns2socks processes by name
+    pkill dns2socks 2>/dev/null || true
 
     # Cleanup iptables rules
     iptables -t nat -D POSTROUTING -o $INET_IF -j MASQUERADE 2>/dev/null || true
@@ -121,6 +129,9 @@ trap cleanup EXIT
 
 # Initial cleanup in case of previous failed runs
 echo "Performing initial cleanup..."
+# Kill any leftover processes first
+pkill -f "socat.*5454" 2>/dev/null || true
+pkill dns2socks 2>/dev/null || true
 cleanup 2>/dev/null || true
 
 echo "Starting Wi-Fi hotspot..."
@@ -240,6 +251,21 @@ sysctl -w net.ipv4.ip_forward=1
 # Set up dns2socks for DNS leak protection
 if [[ "$USE_DNS2SOCKS" == "true" ]]; then
     echo "Starting dns2socks for DNS leak protection..."
+    
+    # Check if port is available
+    if netstat -tulpn 2>/dev/null | grep -q ":$DNS2SOCKS_PORT "; then
+        echo "Port $DNS2SOCKS_PORT is already in use. Attempting to free it..."
+        pkill -f "socat.*$DNS2SOCKS_PORT" 2>/dev/null || true
+        pkill -f "dns2socks.*$DNS2SOCKS_PORT" 2>/dev/null || true
+        sleep 1
+        
+        # Check again
+        if netstat -tulpn 2>/dev/null | grep -q ":$DNS2SOCKS_PORT "; then
+            echo "Error: Port $DNS2SOCKS_PORT is still in use. Please check what's using it:"
+            netstat -tulpn | grep ":$DNS2SOCKS_PORT "
+            exit 1
+        fi
+    fi
     
     # Backup original DNS settings before making changes
     echo "Backing up original DNS configuration..."
