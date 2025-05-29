@@ -20,13 +20,18 @@ LOCAL_SOCKS_PORT=1080
 DNS_SERVERS="8.8.8.8,1.1.1.1"
 
 # UDP Configuration - set to true to disable UDP completely
-DISABLE_UDP=false
+DISABLE_UDP=true
+
+# DNS leak protection using dns2socks
+USE_DNS2SOCKS=true
+DNS2SOCKS_PORT=5353
 
 # Process tracking
 HOSTAPD_PID=""
 DNSMASQ_PID=""
 TUN2SOCKS_PID=""
 SSH_TUNNEL_PID=""
+DNS2SOCKS_PID=""
 
 # Check for required tools
 if ! command -v tun2socks-linux-arm64 &> /dev/null; then
@@ -39,12 +44,19 @@ if ! command -v ssh &> /dev/null; then
   exit 1
 fi
 
+if [[ "$USE_DNS2SOCKS" == "true" ]] && ! command -v dns2socks &> /dev/null; then
+  echo "dns2socks not found! Please install dns2socks."
+  echo "Install with: sudo apt install dns2socks"
+  exit 1
+fi
+
 function cleanup {
     echo -e "\nCleaning up..."
 
     # Kill processes in reverse order
     [[ -n "$TUN2SOCKS_PID" ]] && kill $TUN2SOCKS_PID 2>/dev/null && wait $TUN2SOCKS_PID 2>/dev/null || true
     [[ -n "$SSH_TUNNEL_PID" ]] && kill $SSH_TUNNEL_PID 2>/dev/null && wait $SSH_TUNNEL_PID 2>/dev/null || true
+    [[ -n "$DNS2SOCKS_PID" ]] && kill $DNS2SOCKS_PID 2>/dev/null && wait $DNS2SOCKS_PID 2>/dev/null || true
     [[ -n "$HOSTAPD_PID" ]] && kill $HOSTAPD_PID 2>/dev/null && wait $HOSTAPD_PID 2>/dev/null || true
     [[ -n "$DNSMASQ_PID" ]] && kill $DNSMASQ_PID 2>/dev/null && wait $DNSMASQ_PID 2>/dev/null || true
 
@@ -65,6 +77,37 @@ function cleanup {
     # Remove tun interface
     ip link set $TUN_IF down 2>/dev/null || true
     ip tuntap del dev $TUN_IF mode tun 2>/dev/null || true
+
+    # Restore original DNS settings
+    if [[ "$USE_DNS2SOCKS" == "true" ]]; then
+        echo "Restoring original DNS configuration..."
+        
+        # Remove immutable flag from resolv.conf
+        chattr -i /etc/resolv.conf 2>/dev/null || true
+        
+        # Restore original resolv.conf
+        if [[ -f /tmp/resolv.conf.backup ]]; then
+            cp /tmp/resolv.conf.backup /etc/resolv.conf
+            rm -f /tmp/resolv.conf.backup
+        fi
+        
+        # Restore NetworkManager DNS management
+        if command -v nmcli &> /dev/null; then
+            echo "Restoring NetworkManager DNS management..."
+            nmcli device set $WLAN_IF managed yes 2>/dev/null || true
+            nmcli device set $INET_IF ipv4.ignore-auto-dns no 2>/dev/null || true
+        fi
+        
+        # Restore systemd-resolved settings
+        if systemctl is-active --quiet systemd-resolved; then
+            echo "Restoring systemd-resolved settings..."
+            resolvectl revert $INET_IF 2>/dev/null || true
+            # Restart systemd-resolved to restore original settings
+            systemctl restart systemd-resolved 2>/dev/null || true
+        fi
+        
+        echo "DNS settings restored"
+    fi
 
     # Remove temp files
     rm -f /tmp/hostapd.conf /tmp/dnsmasq.conf
@@ -107,6 +150,16 @@ max_num_sta=10
 EOF
 
 # 2) Create dnsmasq config
+if [[ "$USE_DNS2SOCKS" == "true" ]]; then
+cat > /tmp/dnsmasq.conf <<EOF
+interface=$WLAN_IF
+dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,24h
+dhcp-option=3,192.168.50.1
+dhcp-option=6,192.168.50.1
+server=127.0.0.1#$DNS2SOCKS_PORT
+no-resolv
+EOF
+else
 cat > /tmp/dnsmasq.conf <<EOF
 interface=$WLAN_IF
 dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,24h
@@ -115,6 +168,7 @@ dhcp-option=6,192.168.50.1
 server=8.8.8.8
 server=1.1.1.1
 EOF
+fi
 
 # Setup wlan interface
 ip link set $WLAN_IF down
@@ -181,6 +235,63 @@ sleep 3
 echo "Enabling IP forwarding and setting up routing..."
 sysctl -w net.ipv4.ip_forward=1
 
+# Set up dns2socks for DNS leak protection
+if [[ "$USE_DNS2SOCKS" == "true" ]]; then
+    echo "Starting dns2socks for DNS leak protection..."
+    
+    # Backup original DNS settings before making changes
+    echo "Backing up original DNS configuration..."
+    cp /etc/resolv.conf /tmp/resolv.conf.backup 2>/dev/null || true
+    
+    # Prevent NetworkManager from managing DNS on our interfaces
+    if command -v nmcli &> /dev/null; then
+        echo "Configuring NetworkManager to not override DNS..."
+        # Set our interfaces to unmanaged for DNS
+        nmcli device set $WLAN_IF managed no 2>/dev/null || true
+        nmcli device set $INET_IF ipv4.ignore-auto-dns yes 2>/dev/null || true
+    fi
+    
+    # Start dns2socks to forward DNS through SOCKS proxy
+    if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
+        dns2socks socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT 8.8.8.8 127.0.0.1:$DNS2SOCKS_PORT &
+        DNS2SOCKS_PID=$!
+        echo "dns2socks started with authentication for $PROXY_IP:$PROXY_PORT"
+    else
+        dns2socks socks5://$PROXY_IP:$PROXY_PORT 8.8.8.8 127.0.0.1:$DNS2SOCKS_PORT &
+        DNS2SOCKS_PID=$!
+        echo "dns2socks started for $PROXY_IP:$PROXY_PORT"
+    fi
+    
+    sleep 2
+    
+    # Configure system DNS to use local dns2socks
+    echo "Configuring system DNS to prevent leaks..."
+    
+    # Method 1: Use systemd-resolved if available
+    if systemctl is-active --quiet systemd-resolved; then
+        echo "Configuring systemd-resolved to use dns2socks..."
+        resolvectl dns $INET_IF 127.0.0.1:$DNS2SOCKS_PORT 2>/dev/null || true
+        resolvectl domain $INET_IF "~." 2>/dev/null || true
+        # Also set global DNS as fallback
+        resolvectl dns 127.0.0.1:$DNS2SOCKS_PORT 2>/dev/null || true
+        echo "systemd-resolved configured to use SOCKS proxy"
+    fi
+    
+    # Method 2: Set /etc/resolv.conf as backup
+    echo "Setting /etc/resolv.conf to use local DNS proxy..."
+    cat > /etc/resolv.conf <<EOF
+# DNS through SOCKS proxy via dns2socks
+nameserver 127.0.0.1
+# Fallback to our hotspot DNS
+nameserver 192.168.50.1
+EOF
+    
+    # Protect resolv.conf from being overwritten
+    chattr +i /etc/resolv.conf 2>/dev/null || true
+    
+    echo "Pi DNS configured to use SOCKS proxy - no DNS leaks!"
+fi
+
 # Add route to proxy server through original interface (prevent routing loop)
 ORIGINAL_GW=$(ip route | grep "^default" | head -1 | awk '{print $3}')
 ip route add $PROXY_IP via $ORIGINAL_GW dev $INET_IF 2>/dev/null || true
@@ -214,6 +325,11 @@ echo "Hotspot '$HOTSPOT_SSID' is running!"
 echo "Internet traffic is routed through SOCKS5 proxy $PROXY_IP:$PROXY_PORT"
 if [[ -n "$PROXY_USER" ]]; then
   echo "Using SOCKS5 auth user: $PROXY_USER"
+fi
+if [[ "$USE_DNS2SOCKS" == "true" ]]; then
+  echo "DNS leak protection: ENABLED (dns2socks) - All DNS queries go through proxy"
+else
+  echo "DNS leak protection: DISABLED - DNS queries may leak"
 fi
 echo "Connect your device to the Wi-Fi and enjoy."
 echo "Press Ctrl+C to stop and clean up."
