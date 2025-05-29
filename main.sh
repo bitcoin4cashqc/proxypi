@@ -142,9 +142,9 @@ sleep 2
 
 echo "Starting tun2socks-linux-arm64..."
 if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
-    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT -interface $INET_IF &
+    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT -interface $INET_IF --udp-timeout 0 &
 else
-    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_IP:$PROXY_PORT -interface $INET_IF &
+    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_IP:$PROXY_PORT -interface $INET_IF --udp-timeout 0 &
 fi
 TUN2SOCKS_PID=$!
 
