@@ -2,30 +2,266 @@
 
 set -e
 
-# === CONFIGURATION ===
-WLAN_IF=wlan1
-INET_IF=wlan0
+# === ARGUMENT PARSING AND CONFIGURATION ===
+
+# Default configuration values
+WLAN_IF="wlan1"
+INET_IF="wlan0"
 HOTSPOT_SSID="MyProxyAP"
 HOTSPOT_PSK="password123"
+TUN_IF="tun0"
+LOCAL_SOCKS_PORT="1080"
+DISABLE_UDP="false"
+USE_DNS2SOCKS="true"
+DNS2SOCKS_PORT="5454"
 
-# SOCKS5 proxy details — change here or export as env vars before running
-PROXY_IP="83.97.79.222"
-PROXY_PORT="1080"
-PROXY_USER="1grj9lcxh4x"
-PROXY_PASS="115c06dfl8r"
-TUN_IF=tun0
-LOCAL_SOCKS_PORT=1080
+# Binary paths (can be overridden)
+TUN2SOCKS_BINARY="tun2socks-linux-arm64"
+DNS2SOCKS_BINARY="$HOME/dns2socks"
 
-# DNS servers to use (will be served through the proxy)
-DNS_SERVERS="8.8.8.8,1.1.1.1"
+# Required parameters (no defaults)
+PROXY_IP=""
+PROXY_PORT=""
+PROXY_USER=""
+PROXY_PASS=""
 
-# UDP Configuration - set to true to disable UDP completely
-DISABLE_UDP=true
+# Load configuration file if it exists
+CONFIG_FILE="/etc/proxypi/config.conf"
+if [[ -f "$CONFIG_FILE" ]]; then
+    # Source the config file but don't override already set variables
+    set -a  # automatically export all variables
+    source "$CONFIG_FILE" 2>/dev/null || true
+    set +a
+fi
 
-# DNS leak protection using dns2socks
-USE_DNS2SOCKS=true
-DNS2SOCKS_PORT=5454
-DNS2SOCKS_PATH="$HOME/dns2socks"
+
+
+# Function to show usage
+show_help() {
+    cat << EOF
+Usage: $0 --proxy-ip <IP> --proxy-port <PORT> [OPTIONS]
+
+Required Parameters:
+    --proxy-ip <IP>         SOCKS5 proxy server IP address
+    --proxy-port <PORT>     SOCKS5 proxy server port
+
+Optional Parameters:
+    --proxy-user <USER>     SOCKS5 proxy username (if authentication required)
+    --proxy-pass <PASS>     SOCKS5 proxy password (if authentication required)
+    
+Network Configuration:
+    --wlan-if <INTERFACE>   Wi-Fi interface for hotspot (default: $WLAN_IF)
+    --inet-if <INTERFACE>   Internet interface (default: $INET_IF)
+    --tun-if <INTERFACE>    TUN interface name (default: $TUN_IF)
+    
+Hotspot Configuration:
+    --ssid <SSID>          Hotspot SSID (default: $HOTSPOT_SSID)
+    --password <PASSWORD>   Hotspot password (default: $HOTSPOT_PSK)
+    --local-port <PORT>     Local SOCKS port (default: $LOCAL_SOCKS_PORT)
+    
+Feature Configuration:
+    --disable-udp          Disable UDP traffic through proxy
+    --enable-udp           Enable UDP traffic through proxy (default)
+    --disable-dns-proxy    Disable DNS leak protection
+    --enable-dns-proxy     Enable DNS leak protection (default)
+    --dns-port <PORT>      DNS2SOCKS local port (default: $DNS2SOCKS_PORT)
+    
+Binary Paths:
+    --tun2socks <PATH>     Path to tun2socks binary (default: $TUN2SOCKS_BINARY)
+    --dns2socks <PATH>     Path to dns2socks binary (default: $DNS2SOCKS_BINARY)
+    
+Other Options:
+    --config <FILE>        Use custom configuration file
+    --help                 Show this help message
+
+Examples:
+    # Basic usage with proxy authentication
+    sudo $0 --proxy-ip 83.97.79.222 --proxy-port 1080 --proxy-user myuser --proxy-pass mypass
+    
+    # Custom interface and hotspot settings
+    sudo $0 --proxy-ip 192.168.1.100 --proxy-port 1080 --wlan-if wlan0 --ssid "MyHotspot"
+    
+    # Disable DNS leak protection
+    sudo $0 --proxy-ip 10.0.0.1 --proxy-port 1080 --disable-dns-proxy
+    
+    # Custom binary paths
+    sudo $0 --proxy-ip 10.0.0.1 --proxy-port 1080 --tun2socks /custom/path/tun2socks
+
+Environment Variables:
+    You can also set parameters using environment variables:
+    PROXY_IP, PROXY_PORT, PROXY_USER, PROXY_PASS, etc.
+
+Configuration File:
+    Default config file: $CONFIG_FILE
+    Use --config to specify a different file.
+
+EOF
+}
+
+# Parse command line arguments
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --proxy-ip)
+                PROXY_IP="$2"
+                shift 2
+                ;;
+            --proxy-port)
+                PROXY_PORT="$2"
+                shift 2
+                ;;
+            --proxy-user)
+                PROXY_USER="$2"
+                shift 2
+                ;;
+            --proxy-pass)
+                PROXY_PASS="$2"
+                shift 2
+                ;;
+            --wlan-if)
+                WLAN_IF="$2"
+                shift 2
+                ;;
+            --inet-if)
+                INET_IF="$2"
+                shift 2
+                ;;
+            --tun-if)
+                TUN_IF="$2"
+                shift 2
+                ;;
+            --ssid)
+                HOTSPOT_SSID="$2"
+                shift 2
+                ;;
+            --password)
+                HOTSPOT_PSK="$2"
+                shift 2
+                ;;
+            --local-port)
+                LOCAL_SOCKS_PORT="$2"
+                shift 2
+                ;;
+            --disable-udp)
+                DISABLE_UDP="true"
+                shift
+                ;;
+            --enable-udp)
+                DISABLE_UDP="false"
+                shift
+                ;;
+            --disable-dns-proxy)
+                USE_DNS2SOCKS="false"
+                shift
+                ;;
+            --enable-dns-proxy)
+                USE_DNS2SOCKS="true"
+                shift
+                ;;
+            --dns-port)
+                DNS2SOCKS_PORT="$2"
+                shift 2
+                ;;
+            --tun2socks)
+                TUN2SOCKS_BINARY="$2"
+                shift 2
+                ;;
+            --dns2socks)
+                DNS2SOCKS_BINARY="$2"
+                shift 2
+                ;;
+            --config)
+                CONFIG_FILE="$2"
+                # Reload configuration from specified file
+                if [[ -f "$CONFIG_FILE" ]]; then
+                    set -a
+                    source "$CONFIG_FILE" 2>/dev/null || true
+                    set +a
+                fi
+                shift 2
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            *)
+                echo "Error: Unknown option $1"
+                echo "Use --help for usage information."
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Validate required parameters
+validate_configuration() {
+    local errors=()
+    
+    if [[ -z "$PROXY_IP" ]]; then
+        errors+=("--proxy-ip is required")
+    fi
+    
+    if [[ -z "$PROXY_PORT" ]]; then
+        errors+=("--proxy-port is required")
+    fi
+    
+    # Validate port numbers
+    if [[ -n "$PROXY_PORT" ]] && ! [[ "$PROXY_PORT" =~ ^[0-9]+$ ]] || [[ "$PROXY_PORT" -lt 1 || "$PROXY_PORT" -gt 65535 ]]; then
+        errors+=("--proxy-port must be a valid port number (1-65535)")
+    fi
+    
+    if ! [[ "$LOCAL_SOCKS_PORT" =~ ^[0-9]+$ ]] || [[ "$LOCAL_SOCKS_PORT" -lt 1 || "$LOCAL_SOCKS_PORT" -gt 65535 ]]; then
+        errors+=("--local-port must be a valid port number (1-65535)")
+    fi
+    
+    if ! [[ "$DNS2SOCKS_PORT" =~ ^[0-9]+$ ]] || [[ "$DNS2SOCKS_PORT" -lt 1 || "$DNS2SOCKS_PORT" -gt 65535 ]]; then
+        errors+=("--dns-port must be a valid port number (1-65535)")
+    fi
+    
+    # Check if required binaries exist
+    if [[ ! -x "$TUN2SOCKS_BINARY" ]]; then
+        errors+=("tun2socks binary not found at: $TUN2SOCKS_BINARY")
+    fi
+    
+    if [[ "$USE_DNS2SOCKS" == "true" ]] && [[ ! -x "$DNS2SOCKS_BINARY" ]]; then
+        errors+=("dns2socks binary not found at: $DNS2SOCKS_BINARY (required for DNS leak protection)")
+    fi
+    
+    # Check if running as root
+    if [[ $EUID -ne 0 ]]; then
+        errors+=("This script must be run as root (use sudo)")
+    fi
+    
+    if [[ ${#errors[@]} -gt 0 ]]; then
+        echo "Configuration errors:"
+        printf '  %s\n' "${errors[@]}"
+        echo
+        echo "Use --help for usage information."
+        exit 1
+    fi
+}
+
+# Parse arguments
+parse_arguments "$@"
+
+# Validate configuration
+validate_configuration
+
+# Display configuration summary
+echo "=== ProxyPi Configuration ==="
+echo "Proxy Server: $PROXY_IP:$PROXY_PORT"
+[[ -n "$PROXY_USER" ]] && echo "Proxy Auth: $PROXY_USER:***"
+echo "WLAN Interface: $WLAN_IF"
+echo "Internet Interface: $INET_IF"
+echo "TUN Interface: $TUN_IF"
+echo "Hotspot SSID: $HOTSPOT_SSID"
+echo "Local SOCKS Port: $LOCAL_SOCKS_PORT"
+echo "UDP Enabled: $([[ "$DISABLE_UDP" == "false" ]] && echo "Yes" || echo "No")"
+echo "DNS Leak Protection: $([[ "$USE_DNS2SOCKS" == "true" ]] && echo "Yes (port $DNS2SOCKS_PORT)" || echo "No")"
+echo "TUN2SOCKS Binary: $TUN2SOCKS_BINARY"
+[[ "$USE_DNS2SOCKS" == "true" ]] && echo "DNS2SOCKS Binary: $DNS2SOCKS_BINARY"
+echo "=========================="
+echo
 
 # Process tracking
 HOSTAPD_PID=""
@@ -35,8 +271,8 @@ SSH_TUNNEL_PID=""
 DNS2SOCKS_PID=""
 
 # Check for required tools
-if ! command -v tun2socks-linux-arm64 &> /dev/null; then
-  echo "tun2socks-linux-arm64 not found! Please install tun2socks-linux-arm64."
+if ! command -v "$TUN2SOCKS_BINARY" &> /dev/null; then
+  echo "tun2socks not found at $TUN2SOCKS_BINARY! Please check the path or run install.sh."
   exit 1
 fi
 
@@ -45,9 +281,9 @@ if ! command -v ssh &> /dev/null; then
   exit 1
 fi
 
-if [[ "$USE_DNS2SOCKS" == "true" ]] && [[ ! -x "$DNS2SOCKS_PATH" ]]; then
-  echo "dns2socks not found at $DNS2SOCKS_PATH!"
-  echo "Please ensure dns2socks is compiled and available at: $DNS2SOCKS_PATH"
+if [[ "$USE_DNS2SOCKS" == "true" ]] && [[ ! -x "$DNS2SOCKS_BINARY" ]]; then
+  echo "dns2socks not found at $DNS2SOCKS_BINARY!"
+  echo "Please ensure dns2socks is compiled and available at: $DNS2SOCKS_BINARY"
   echo "Or install system version with: sudo apt install dns2socks"
   exit 1
 fi
@@ -264,9 +500,9 @@ else
 fi
 
 if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
-    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT -interface $INET_IF $UDP_TIMEOUT_PARAM &
+    "$TUN2SOCKS_BINARY" -device tun://$TUN_IF -proxy socks5://$PROXY_USER:$PROXY_PASS@$PROXY_IP:$PROXY_PORT -interface $INET_IF $UDP_TIMEOUT_PARAM &
 else
-    tun2socks-linux-arm64 -device tun://$TUN_IF -proxy socks5://$PROXY_IP:$PROXY_PORT -interface $INET_IF $UDP_TIMEOUT_PARAM &
+    "$TUN2SOCKS_BINARY" -device tun://$TUN_IF -proxy socks5://$PROXY_IP:$PROXY_PORT -interface $INET_IF $UDP_TIMEOUT_PARAM &
 fi
 TUN2SOCKS_PID=$!
 
@@ -307,11 +543,11 @@ if [[ "$USE_DNS2SOCKS" == "true" ]]; then
     
     # Start dns2socks to forward DNS through SOCKS proxy
     if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
-        $DNS2SOCKS_PATH /u:$PROXY_USER /p:$PROXY_PASS $PROXY_IP:$PROXY_PORT 8.8.8.8:53 127.0.0.1:$DNS2SOCKS_PORT &
+        $DNS2SOCKS_BINARY /u:$PROXY_USER /p:$PROXY_PASS $PROXY_IP:$PROXY_PORT 8.8.8.8:53 127.0.0.1:$DNS2SOCKS_PORT &
         DNS2SOCKS_PID=$!
         echo "dns2socks started with authentication for $PROXY_IP:$PROXY_PORT"
     else
-        $DNS2SOCKS_PATH $PROXY_IP:$PROXY_PORT 8.8.8.8:53 127.0.0.1:$DNS2SOCKS_PORT &
+        $DNS2SOCKS_BINARY $PROXY_IP:$PROXY_PORT 8.8.8.8:53 127.0.0.1:$DNS2SOCKS_PORT &
         DNS2SOCKS_PID=$!
         echo "dns2socks started for $PROXY_IP:$PROXY_PORT"
     fi
@@ -381,7 +617,7 @@ if [[ -n "$PROXY_USER" ]]; then
   echo "Using SOCKS5 auth user: $PROXY_USER"
 fi
 if [[ "$USE_DNS2SOCKS" == "true" ]]; then
-  echo "DNS leak protection: ENABLED (custom dns2socks at $DNS2SOCKS_PATH) - All DNS queries go through proxy"
+  echo "DNS leak protection: ENABLED (custom dns2socks at $DNS2SOCKS_BINARY) - All DNS queries go through proxy"
 else
   echo "DNS leak protection: DISABLED - DNS queries may leak"
 fi
