@@ -39,6 +39,11 @@ A comprehensive solution to create a Wi-Fi hotspot that routes all traffic throu
    - Configure system services
    - Create configuration files
 
+3. **Install screen (optional but recommended for SSH usage)**:
+   ```bash
+   sudo apt install screen
+   ```
+
 ## Configuration
 
 ### Method 1: Command Line Arguments (Recommended)
@@ -86,6 +91,36 @@ sudo ./main.sh --proxy-ip 192.168.1.100 --proxy-port 1080
 ```bash
 sudo ./main.sh --proxy-ip 83.97.79.222 --proxy-port 1080 --proxy-user myuser --proxy-pass mypass
 ```
+
+### Running in Background with Screen (Recommended for SSH)
+
+When connecting via SSH, it's recommended to run the hotspot in a `screen` session to prevent it from stopping when you disconnect:
+
+```bash
+# Create a new named screen session
+screen -S proxypi
+
+# Inside the screen session, run the hotspot
+sudo ./main.sh --proxy-ip 83.97.79.222 --proxy-port 1080 --proxy-user myuser --proxy-pass mypass
+
+# Detach from screen (hotspot keeps running in background)
+# Press: Ctrl+A, then D
+
+# Reconnect to the screen session later
+screen -r proxypi
+
+# List all screen sessions
+screen -ls
+```
+
+**Important Screen Commands:**
+- `screen -S <name>`: Create a new named screen session
+- `Ctrl+A, then D`: Detach from screen (leaves session running)
+- `screen -r <name>`: Reattach to a named screen session
+- `screen -ls`: List all active screen sessions
+- `exit` or `Ctrl+C`: Stop the hotspot and exit screen
+
+This ensures your hotspot continues running even if your SSH connection drops!
 
 ### Custom Hotspot Settings
 ```bash
