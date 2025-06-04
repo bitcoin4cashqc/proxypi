@@ -225,6 +225,24 @@ sudo ./main.sh --proxy-ip 192.168.1.100 --proxy-port 1080 \
    - Check if the Wi-Fi interface supports AP mode
    - Try a different channel: edit the hostapd configuration
 
+5. **Script stops when SSH disconnects**:
+   - Use screen to run the script: `screen -S proxypi`
+   - Start the hotspot inside screen
+   - Detach with `Ctrl+A, D`
+   - Reconnect later with `screen -r proxypi`
+
+6. **Screen session management**:
+   ```bash
+   # List all screen sessions
+   screen -ls
+   
+   # Kill a stuck screen session
+   screen -X -S proxypi quit
+   
+   # Force reattach to a screen session
+   screen -r proxypi -d
+   ```
+
 ### Checking Status
 
 ```bash
