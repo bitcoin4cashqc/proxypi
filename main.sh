@@ -16,7 +16,7 @@ USE_DNS2SOCKS="true"
 DNS2SOCKS_PORT="5454"
 
 # Binary paths (can be overridden)
-TUN2SOCKS_BINARY="tun2socks-linux-arm64"
+TUN2SOCKS_BINARY="/usr/local/bin/tun2socks-linux-arm64 "
 DNS2SOCKS_BINARY="/root/dns2socks"
 
 # Required parameters (no defaults)
