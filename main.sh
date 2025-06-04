@@ -555,15 +555,19 @@ if [[ "$USE_DNS2SOCKS" == "true" ]]; then
             DNS2SOCKS_PID=$!
             echo "dns2socks started with authentication for $PROXY_IP:$PROXY_PORT using DNS $DNS_SERVER"
             
-            # Wait a moment to see if it connects successfully
-            sleep 3
+            # Wait for dns2socks to start up
+            sleep 2
             
-            # Check if dns2socks is still running (not crashed)
-            if kill -0 $DNS2SOCKS_PID 2>/dev/null; then
-                echo "DNS server $DNS_SERVER appears to be working"
+            # Test if DNS resolution actually works through the proxy
+            echo "Testing DNS resolution through proxy..."
+            if timeout 5 nslookup google.com 127.0.0.1 -port=$DNS2SOCKS_PORT >/dev/null 2>&1; then
+                echo "DNS server $DNS_SERVER is working correctly through proxy"
                 break
             else
-                echo "DNS server $DNS_SERVER failed, trying next..."
+                echo "DNS server $DNS_SERVER failed to resolve queries through proxy"
+                # Kill the failed dns2socks process
+                kill $DNS2SOCKS_PID 2>/dev/null || true
+                wait $DNS2SOCKS_PID 2>/dev/null || true
                 DNS2SOCKS_PID=""
             fi
         done
@@ -571,6 +575,27 @@ if [[ "$USE_DNS2SOCKS" == "true" ]]; then
         if [[ -z "$DNS2SOCKS_PID" ]]; then
             echo "All DNS servers failed through SOCKS proxy. Disabling DNS leak protection."
             USE_DNS2SOCKS="false"
+            
+            # Regenerate dnsmasq config without dns2socks
+            echo "Reconfiguring dnsmasq to use direct DNS servers..."
+            cat > /tmp/dnsmasq.conf <<EOF
+interface=$WLAN_IF
+dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,24h
+dhcp-option=3,192.168.50.1
+dhcp-option=6,192.168.50.1
+server=8.8.8.8
+server=1.1.1.1
+EOF
+            
+            # Restart dnsmasq with new config
+            if [[ -n "$DNSMASQ_PID" ]]; then
+                kill $DNSMASQ_PID 2>/dev/null || true
+                wait $DNSMASQ_PID 2>/dev/null || true
+            fi
+            
+            dnsmasq --conf-file=/tmp/dnsmasq.conf --pid-file=/tmp/dnsmasq.pid
+            DNSMASQ_PID=$(cat /tmp/dnsmasq.pid)
+            echo "dnsmasq restarted with direct DNS servers"
         fi
     else
         # Try different DNS servers if 8.8.8.8 is blocked
@@ -582,15 +607,19 @@ if [[ "$USE_DNS2SOCKS" == "true" ]]; then
             DNS2SOCKS_PID=$!
             echo "dns2socks started for $PROXY_IP:$PROXY_PORT using DNS $DNS_SERVER"
             
-            # Wait a moment to see if it connects successfully
-            sleep 3
+            # Wait for dns2socks to start up
+            sleep 2
             
-            # Check if dns2socks is still running (not crashed)
-            if kill -0 $DNS2SOCKS_PID 2>/dev/null; then
-                echo "DNS server $DNS_SERVER appears to be working"
+            # Test if DNS resolution actually works through the proxy
+            echo "Testing DNS resolution through proxy..."
+            if timeout 5 nslookup google.com 127.0.0.1 -port=$DNS2SOCKS_PORT >/dev/null 2>&1; then
+                echo "DNS server $DNS_SERVER is working correctly through proxy"
                 break
             else
-                echo "DNS server $DNS_SERVER failed, trying next..."
+                echo "DNS server $DNS_SERVER failed to resolve queries through proxy"
+                # Kill the failed dns2socks process
+                kill $DNS2SOCKS_PID 2>/dev/null || true
+                wait $DNS2SOCKS_PID 2>/dev/null || true
                 DNS2SOCKS_PID=""
             fi
         done
@@ -598,6 +627,27 @@ if [[ "$USE_DNS2SOCKS" == "true" ]]; then
         if [[ -z "$DNS2SOCKS_PID" ]]; then
             echo "All DNS servers failed through SOCKS proxy. Disabling DNS leak protection."
             USE_DNS2SOCKS="false"
+            
+            # Regenerate dnsmasq config without dns2socks
+            echo "Reconfiguring dnsmasq to use direct DNS servers..."
+            cat > /tmp/dnsmasq.conf <<EOF
+interface=$WLAN_IF
+dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,24h
+dhcp-option=3,192.168.50.1
+dhcp-option=6,192.168.50.1
+server=8.8.8.8
+server=1.1.1.1
+EOF
+            
+            # Restart dnsmasq with new config
+            if [[ -n "$DNSMASQ_PID" ]]; then
+                kill $DNSMASQ_PID 2>/dev/null || true
+                wait $DNSMASQ_PID 2>/dev/null || true
+            fi
+            
+            dnsmasq --conf-file=/tmp/dnsmasq.conf --pid-file=/tmp/dnsmasq.pid
+            DNSMASQ_PID=$(cat /tmp/dnsmasq.pid)
+            echo "dnsmasq restarted with direct DNS servers"
         fi
     fi
     
