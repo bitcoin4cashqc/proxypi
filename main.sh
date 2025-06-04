@@ -406,6 +406,9 @@ dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,24h
 dhcp-option=3,192.168.50.1
 dhcp-option=6,192.168.50.1
 server=127.0.0.1#$DNS2SOCKS_PORT
+# Fallback DNS servers in case dns2socks fails
+server=8.8.8.8
+server=1.1.1.1
 no-resolv
 EOF
 else
@@ -543,13 +546,59 @@ if [[ "$USE_DNS2SOCKS" == "true" ]]; then
     
     # Start dns2socks to forward DNS through SOCKS proxy
     if [[ -n "$PROXY_USER" && -n "$PROXY_PASS" ]]; then
-        $DNS2SOCKS_BINARY /u:$PROXY_USER /p:$PROXY_PASS $PROXY_IP:$PROXY_PORT 8.8.8.8:53 127.0.0.1:$DNS2SOCKS_PORT &
-        DNS2SOCKS_PID=$!
-        echo "dns2socks started with authentication for $PROXY_IP:$PROXY_PORT"
+        # Try different DNS servers if 8.8.8.8 is blocked
+        DNS_SERVERS=("8.8.8.8:53" "1.1.1.1:53" "9.9.9.9:53" "208.67.222.222:53")
+        
+        for DNS_SERVER in "${DNS_SERVERS[@]}"; do
+            echo "Trying DNS server: $DNS_SERVER"
+            $DNS2SOCKS_BINARY /u:$PROXY_USER /p:$PROXY_PASS $PROXY_IP:$PROXY_PORT $DNS_SERVER 127.0.0.1:$DNS2SOCKS_PORT &
+            DNS2SOCKS_PID=$!
+            echo "dns2socks started with authentication for $PROXY_IP:$PROXY_PORT using DNS $DNS_SERVER"
+            
+            # Wait a moment to see if it connects successfully
+            sleep 3
+            
+            # Check if dns2socks is still running (not crashed)
+            if kill -0 $DNS2SOCKS_PID 2>/dev/null; then
+                echo "DNS server $DNS_SERVER appears to be working"
+                break
+            else
+                echo "DNS server $DNS_SERVER failed, trying next..."
+                DNS2SOCKS_PID=""
+            fi
+        done
+        
+        if [[ -z "$DNS2SOCKS_PID" ]]; then
+            echo "All DNS servers failed through SOCKS proxy. Disabling DNS leak protection."
+            USE_DNS2SOCKS="false"
+        fi
     else
-        $DNS2SOCKS_BINARY $PROXY_IP:$PROXY_PORT 8.8.8.8:53 127.0.0.1:$DNS2SOCKS_PORT &
-        DNS2SOCKS_PID=$!
-        echo "dns2socks started for $PROXY_IP:$PROXY_PORT"
+        # Try different DNS servers if 8.8.8.8 is blocked
+        DNS_SERVERS=("8.8.8.8:53" "1.1.1.1:53" "9.9.9.9:53" "208.67.222.222:53")
+        
+        for DNS_SERVER in "${DNS_SERVERS[@]}"; do
+            echo "Trying DNS server: $DNS_SERVER"
+            $DNS2SOCKS_BINARY $PROXY_IP:$PROXY_PORT $DNS_SERVER 127.0.0.1:$DNS2SOCKS_PORT &
+            DNS2SOCKS_PID=$!
+            echo "dns2socks started for $PROXY_IP:$PROXY_PORT using DNS $DNS_SERVER"
+            
+            # Wait a moment to see if it connects successfully
+            sleep 3
+            
+            # Check if dns2socks is still running (not crashed)
+            if kill -0 $DNS2SOCKS_PID 2>/dev/null; then
+                echo "DNS server $DNS_SERVER appears to be working"
+                break
+            else
+                echo "DNS server $DNS_SERVER failed, trying next..."
+                DNS2SOCKS_PID=""
+            fi
+        done
+        
+        if [[ -z "$DNS2SOCKS_PID" ]]; then
+            echo "All DNS servers failed through SOCKS proxy. Disabling DNS leak protection."
+            USE_DNS2SOCKS="false"
+        fi
     fi
     
     sleep 2
